@@ -1,0 +1,44 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - OLLAMA_API_URL=http://ollama:11434
+      - IPFS_API_URL=http://ipfs:5001
+      - NEXT_PUBLIC_IPFS_GATEWAY=http://localhost:8080/ipfs
+    depends_on:
+      - ollama
+      - ipfs
+    networks:
+      - ai-proof-network
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - ai-proof-network
+
+  ipfs:
+    image: ipfs/kubo:latest
+    ports:
+      - "4001:4001"    # IPFS swarm port
+      - "5001:5001"    # IPFS API port
+      - "8080:8080"    # IPFS gateway port
+    volumes:
+      - ipfs_data:/data/ipfs
+    environment:
+      - IPFS_PROFILE=server
+    networks:
+      - ai-proof-network
+
+volumes:
+  ollama_data:
+  ipfs_data:
+
+networks:
+  ai-proof-network:
+    driver: bridge
