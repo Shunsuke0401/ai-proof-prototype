@@ -48,6 +48,7 @@ TEMP_DIR=$(mktemp -d)
 SUMMARY_FILE="$TEMP_DIR/summary.json"
 SIGNATURE_FILE="$TEMP_DIR/signature.json"
 
+
 # Download files using curl with local IPFS node
 if command -v curl >/dev/null 2>&1; then
     # Try local IPFS node first, fallback to gateway
