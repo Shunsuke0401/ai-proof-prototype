@@ -1,0 +1,20 @@
+[package]
+name = "host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+risc0-zkvm = { workspace = true }
+risc0-binfmt = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+clap = { workspace = true }
+tokio = { workspace = true }
+
+[build-dependencies]
+risc0-build = { workspace = true }
+
+[[bin]]
+name = "zkhost"
+path = "src/main.rs"

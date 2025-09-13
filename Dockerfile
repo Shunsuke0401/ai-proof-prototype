@@ -6,26 +6,31 @@ ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 ENV TZ=UTC
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create app directory
 WORKDIR /app
 
-# Copy package files
+# Copy package files first for better caching
 COPY package.json package-lock.json* ./
 
-# Install dependencies with exact versions
+# Install Node.js dependencies
 RUN npm ci --only=production
 
-# Copy source code
+# Copy remaining source code
 COPY . .
 
-# Build the application
+# Build the Next.js application
 RUN npm run build
+
+# Ensure PATH includes our bin directory
+ENV PATH="/app/bin:${PATH}"
 
 # Expose port
 EXPOSE 3000
 
-# Set user for security
-USER node
-
-# Start the application
+# Start the application (keep as root for ZK operations)
 CMD ["npm", "start"]

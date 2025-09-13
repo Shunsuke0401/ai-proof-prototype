@@ -10,19 +10,19 @@ echo "=========================================="
 
 # Check if required arguments are provided
 if [ $# -lt 2 ]; then
-    echo "Usage: $0 <summary_cid> <signature_cid> [expected_model_hash]"
+    echo "Usage: $0 <summary_cid> <signature_cid> [expected_program_hash]"
     echo "Example: $0 QmSummary123... QmSignature456... abc123..."
     exit 1
 fi
 
 SUMMARY_CID=$1
 SIGNATURE_CID=$2
-EXPECTED_MODEL_HASH=${3:-""}
+EXPECTED_PROGRAM_HASH=${3:-""}
 
 echo "📋 Summary CID: $SUMMARY_CID"
 echo "📋 Signature CID: $SIGNATURE_CID"
-if [ -n "$EXPECTED_MODEL_HASH" ]; then
-    echo "📋 Expected Model Hash: $EXPECTED_MODEL_HASH"
+if [ -n "$EXPECTED_PROGRAM_HASH" ]; then
+    echo "📋 Expected Program Hash: $EXPECTED_PROGRAM_HASH"
 fi
 echo ""
 
@@ -68,25 +68,66 @@ echo "🔐 Verifying EIP-712 signature..."
 node scripts/verify-signature.js "$SUMMARY_FILE" "$SIGNATURE_FILE"
 echo ""
 
-# Step 4: Check model hash if provided
-if [ -n "$EXPECTED_MODEL_HASH" ]; then
-    echo "🤖 Verifying model hash..."
-    ACTUAL_MODEL_HASH=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).modelHash)")
+# Step 3.5: Verify ZK proof
+echo "🔬 Verifying ZK proof..."
+JOURNAL_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.journalCid)")
+PROOF_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.proofCid)")
+
+if [ "$JOURNAL_CID" = "undefined" ] || [ "$PROOF_CID" = "undefined" ]; then
+    echo "⚠️  No ZK proof data found in summary, skipping ZK verification"
+else
+    echo "📥 Fetching ZK artifacts from IPFS..."
+    JOURNAL_URL="$IPFS_GATEWAY/$JOURNAL_CID"
+    PROOF_URL="$IPFS_GATEWAY/$PROOF_CID"
+    JOURNAL_FILE="$TEMP_DIR/journal.json"
+    PROOF_FILE="$TEMP_DIR/proof.bin"
     
-    if [ "$ACTUAL_MODEL_HASH" = "$EXPECTED_MODEL_HASH" ]; then
-        echo "✅ Model hash matches expected value"
+    # Download ZK artifacts
+    if command -v curl >/dev/null 2>&1; then
+        curl -s "$JOURNAL_URL" -o "$JOURNAL_FILE"
+        curl -s "$PROOF_URL" -o "$PROOF_FILE"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$JOURNAL_URL" -O "$JOURNAL_FILE"
+        wget -q "$PROOF_URL" -O "$PROOF_FILE"
+    fi
+    
+    echo "✅ Downloaded ZK artifacts"
+    
+    # Extract program ID from journal
+    PROGRAM_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$JOURNAL_FILE', 'utf8')).programHash)")
+    echo "🔍 Program ID: $PROGRAM_ID"
+    
+    # Verify ZK proof using risc0-verify
+    echo "🔬 Running risc0-verify..."
+    if command -v risc0-verify >/dev/null 2>&1; then
+        risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_ID" --journal "$JOURNAL_FILE"
+        echo "✅ ZK proof verification passed!"
     else
-        echo "❌ Model hash mismatch!"
-        echo "   Expected: $EXPECTED_MODEL_HASH"
-        echo "   Actual:   $ACTUAL_MODEL_HASH"
+        echo "⚠️  risc0-verify not found, skipping ZK proof verification"
+        echo "   Install RISC Zero toolchain to enable ZK verification"
+    fi
+fi
+echo ""
+
+# Step 4: Check program hash if provided
+if [ -n "$EXPECTED_PROGRAM_HASH" ]; then
+    echo "🤖 Verifying program hash..."
+    ACTUAL_PROGRAM_HASH=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).programHash)")
+    
+    if [ "$ACTUAL_PROGRAM_HASH" = "$EXPECTED_PROGRAM_HASH" ]; then
+        echo "✅ Program hash matches expected value"
+    else
+        echo "❌ Program hash mismatch!"
+        echo "   Expected: $EXPECTED_PROGRAM_HASH"
+        echo "   Actual:   $ACTUAL_PROGRAM_HASH"
         exit 1
     fi
     
-    # Save expected model hash
-    echo "$EXPECTED_MODEL_HASH" > expected/model.sha256
-    echo "📝 Saved expected model hash to expected/model.sha256"
+    # Save expected program hash
+    echo "$EXPECTED_PROGRAM_HASH" > expected/program.sha256
+    echo "📝 Saved expected program hash to expected/program.sha256"
 else
-    echo "⚠️  No expected model hash provided, skipping verification"
+    echo "⚠️  No expected program hash provided, skipping verification"
 fi
 echo ""
 
@@ -95,11 +136,16 @@ echo "📊 Summary Information:"
 echo "======================"
 node -e "
     const summary = JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8'));
-    console.log('Model:', summary.model);
-    console.log('Model Hash:', summary.modelHash);
+    console.log('Program Hash:', summary.programHash);
+    console.log('Input Hash:', summary.inputHash);
+    console.log('Output Hash:', summary.outputHash);
     console.log('Signer:', summary.signer);
     console.log('Timestamp:', summary.timestamp);
     console.log('Summary Length:', summary.summary.length, 'characters');
+    if (summary.zk) {
+        console.log('ZK Proof CID:', summary.zk.proofCid);
+        console.log('ZK Journal CID:', summary.zk.journalCid);
+    }
 "
 echo ""
 

@@ -54,36 +54,41 @@ export default function Home() {
       return;
     }
 
+    if (!isConnected || !address) {
+      setError('Please connect your wallet first');
+      return;
+    }
+
     try {
       setError(null);
       setStatus('summarizing');
 
-      // Generate summary using Ollama
+      // Generate ZK summary
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 minutes timeout
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes timeout for ZK proof
       
       const summaryResponse = await fetch('/api/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, model: 'llama3' }),
+        body: JSON.stringify({ text, signer: address }),
         signal: controller.signal
       });
       
       clearTimeout(timeoutId);
 
       if (!summaryResponse.ok) {
-        throw new Error('Failed to generate summary');
+        throw new Error('Failed to generate ZK summary');
       }
 
       const summaryData = await summaryResponse.json();
       
-      // Set the summary and model hash for display
+      // Set the summary and program hash for display
       setSummary(summaryData.summary);
-      setModelHash(summaryData.modelHash);
+      setModelHash(summaryData.programHash); // Using programHash instead of modelHash
       setStatus('idle');
 
     } catch (err) {
-      console.error('Error in summarize:', err);
+      console.error('Error in ZK summarize:', err);
       setError(err instanceof Error ? err.message : 'An unknown error occurred');
       setStatus('error');
     }
