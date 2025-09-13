@@ -21,6 +21,13 @@ const nextConfig = {
       config.resolve.alias = {
         ...config.resolve.alias,
         'node-fetch': false,
+        'pino-pretty': require('path').resolve(__dirname, 'pino-pretty-stub.js')
+      }
+    } else {
+      // Also alias on server to avoid module not found during SSR
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        'pino-pretty': require('path').resolve(__dirname, 'pino-pretty-stub.js')
       }
     }
     

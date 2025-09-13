@@ -76,28 +76,42 @@ export async function POST(request: NextRequest) {
 
       // Upload mock proof and journal to IPFS
       const proofFormData = new FormData();
-      proofFormData.append('file', new Blob([mockResult.proof], { type: 'application/octet-stream' }), 'proof.bin');
+  const proofBytes = mockResult.proof instanceof Buffer ? new Uint8Array(mockResult.proof) : mockResult.proof;
+  proofFormData.append('file', new Blob([proofBytes], { type: 'application/octet-stream' }), 'proof.bin');
       
       const journalFormData = new FormData();
       journalFormData.append('file', new Blob([mockResult.journal], { type: 'application/json' }), 'journal.json');
       
       const [proofUpload, journalUpload] = await Promise.all([
-        fetch('http://localhost:3000/api/ipfs-upload', {
+        fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/ipfs-upload`, {
           method: 'POST',
           body: proofFormData
-        }),
-        fetch('http://localhost:3000/api/ipfs-upload', {
+        }).catch(e => e),
+        fetch(`${process.env.NEXT_PUBLIC_BASE_URL || ''}/api/ipfs-upload`, {
           method: 'POST',
           body: journalFormData
-        })
+        }).catch(e => e)
       ]);
-      
-      if (!proofUpload.ok || !journalUpload.ok) {
-        throw new Error('Failed to upload ZK artifacts to IPFS');
+
+      let proofCid = 'ipfs_unavailable_proof';
+      let journalCid = 'ipfs_unavailable_journal';
+
+      if (proofUpload instanceof Response && proofUpload.ok) {
+        try {
+          const pr = await proofUpload.json();
+          proofCid = pr.cid || proofCid;
+        } catch {/* ignore parse error */}
+      } else {
+        console.warn('Proof upload failed or IPFS unavailable');
       }
-      
-      const proofResult = await proofUpload.json();
-      const journalResult = await journalUpload.json();
+      if (journalUpload instanceof Response && journalUpload.ok) {
+        try {
+          const jr = await journalUpload.json();
+          journalCid = jr.cid || journalCid;
+        } catch {/* ignore parse error */}
+      } else {
+        console.warn('Journal upload failed or IPFS unavailable');
+      }
       
       const result: ZKSummaryResponse = {
         summary: mockResult.summary,
@@ -105,8 +119,8 @@ export async function POST(request: NextRequest) {
         inputHash: mockResult.inputHash,
         outputHash: mockResult.outputHash,
         zk: {
-          proofCid: proofResult.cid,
-          journalCid: journalResult.cid
+          proofCid,
+          journalCid
         },
         signer,
         timestamp: Date.now()

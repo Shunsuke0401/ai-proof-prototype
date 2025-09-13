@@ -3,9 +3,6 @@
 import { useState, useEffect } from "react";
 import { useAccount, useSignTypedData, useChainId } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import ContentTypeSelector from "./components/ContentTypeSelector";
-import OutputArea from "./components/OutputArea";
-import ShareModal from "./components/ShareModal";
 import VerificationPanel from "./components/VerificationPanel";
 
 interface ZKSummaryResponse {
@@ -22,21 +19,13 @@ interface ZKSummaryResponse {
 }
 
 export default function AIStudio() {
-  const [selectedType, setSelectedType] = useState("blog");
   const [activeTab, setActiveTab] = useState<"generate" | "verify">("generate");
   const [inputText, setInputText] = useState(
-    "Write a comprehensive guide about DeFi yield farming strategies for beginners, covering the basics, risks, and how to get started safely."
+    "Write a concise summary about zero-knowledge proofs applications in content authenticity."
   );
-  const [outputContent, setOutputContent] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
   const [zkResult, setZkResult] = useState<ZKSummaryResponse | null>(null);
-
-  const { address, isConnected } = useAccount();
-  const chainId = useChainId();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  const { signTypedDataAsync } = useSignTypedData();
+  const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -45,118 +34,47 @@ export default function AIStudio() {
     null
   );
 
-  const handleGenerate = async () => {
+  const { address, isConnected } = useAccount();
+  const chainId = useChainId();
+  const { signTypedDataAsync } = useSignTypedData();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  async function handleGenerate() {
     if (!inputText.trim()) return;
-
     setIsGenerating(true);
-    setOutputContent("");
-
+    setError(null);
+    setZkResult(null);
     try {
-      const signer = address || "demo_user";
-
-      // Call the summarize API
-      const response = await fetch("/api/summarize", {
+      const res = await fetch("/api/summarize", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           text: inputText,
-          signer: signer,
+          signer: address || "demo_user",
         }),
       });
-
-      if (!response.ok) throw new Error("Generation failed");
-
-      const result: ZKSummaryResponse = await response.json();
-      setZkResult(result);
-
-      // Create a formatted blog post based on the summary
-      const formattedContent = `# ${selectedType}: ${result.summary.replace(
-        "Key topics: ",
-        ""
-      )}
-
-## Introduction
-
-This content has been generated using advanced AI technology with cryptographic proof of authenticity. The key topics covered include: ${result.summary.replace(
-        "Key topics: ",
-        ""
-      )}.
-
-## Content Overview
-
-${generateExpandedContent(result.summary)}
-
-## Verification
-
-This content was generated with:
-- Program Hash: ${result.programHash}
-- Input Hash: ${result.inputHash}
-- Output Hash: ${result.outputHash}
-- ZK Proof CID: ${result.zk.proofCid}
-- Journal CID: ${result.zk.journalCid}
-
-*This content is cryptographically verified and stored on IPFS for permanent provenance.*`;
-
-      setOutputContent(formattedContent);
-    } catch (error) {
-      console.error("Generation error:", error);
-      setOutputContent("Error generating content. Please try again.");
+      if (!res.ok) throw new Error(`Generation failed (${res.status})`);
+      const data: ZKSummaryResponse = await res.json();
+      setZkResult(data);
+    } catch (e) {
+      console.error("Generation error", e);
+      setError(e instanceof Error ? e.message : "Unknown error");
     } finally {
       setIsGenerating(false);
     }
-  };
+  }
 
-  const handleVerify = async (
-    summaryCid: string,
-    signatureCid: string,
-    programHash?: string
-  ) => {
-    console.log("Verification completed for:", {
-      summaryCid,
-      signatureCid,
-      programHash,
-    });
-    // Additional handling can be added here if needed
-  };
-
-  const getContentTypeTitle = (type: string) => {
-    const titles: Record<string, string> = {
-      blog: "Blog Post",
-      email: "Email",
-      report: "Report",
-      code: "Code",
-      creative: "Creative Writing",
-    };
-    return titles[type] || "Content";
-  };
-
-  const generateExpandedContent = (summary: string) => {
-    const topics = summary.replace("Key topics: ", "").split(", ");
-    return topics
-      .map(
-        (topic: string, index: number) =>
-          `### ${index + 1}. ${topic.charAt(0).toUpperCase() + topic.slice(1)}
-
-This section covers important aspects of ${topic} that are relevant to the overall discussion. The content here demonstrates the AI's understanding of the topic and provides valuable insights.`
-      )
-      .join("\n\n");
-  };
-
-  async function uploadToIpfs(
-    content: Blob | string,
-    filename: string,
-    mime: string
-  ) {
+  async function uploadToIpfs(content: string, filename: string) {
     const form = new FormData();
-    const blob =
-      typeof content === "string"
-        ? new Blob([content], { type: mime })
-        : content;
-    form.append("file", new File([blob], filename, { type: mime }));
+    form.append(
+      "file",
+      new File([content], filename, { type: "application/json" })
+    );
     const res = await fetch("/api/ipfs-upload", { method: "POST", body: form });
     if (!res.ok) throw new Error("IPFS upload failed");
-    const data = await res.json();
-    return data.cid as string;
+    const json = await res.json();
+    return json.cid as string;
   }
 
   const domain = {
@@ -173,33 +91,32 @@ This section covers important aspects of ${topic} that are relevant to the overa
     ],
   } as const;
 
-  const handleSave = async () => {
+  async function handleSave() {
     if (!zkResult) return;
     setSaveState("saving");
     try {
-      // Build summary object (align with verifier expectations)
-      const summaryObj = {
+      // 1. Store summary JSON
+      const summaryObject = {
+        summary: zkResult.summary,
         programHash: zkResult.programHash,
         inputHash: zkResult.inputHash,
         outputHash: zkResult.outputHash,
+        proofCid: zkResult.zk.proofCid,
+        journalCid: zkResult.zk.journalCid,
         signer: address || "demo_user",
         timestamp: zkResult.timestamp,
-        summary: zkResult.summary,
       };
-      const summaryJson = JSON.stringify(summaryObj, null, 2);
       const summaryCid = await uploadToIpfs(
-        summaryJson,
-        "summary.json",
-        "application/json"
+        JSON.stringify(summaryObject, null, 2),
+        "summary.json"
       );
 
-      // Typed data message
+      // 2. Build typed data + sign (optional)
       const message = {
         cid: summaryCid,
         modelHash: zkResult.programHash,
         timestamp: new Date(zkResult.timestamp).toISOString(),
       } as const;
-
       let signature: string | null = null;
       if (isConnected && signTypedDataAsync) {
         try {
@@ -209,13 +126,12 @@ This section covers important aspects of ${topic} that are relevant to the overa
             primaryType: "SaveProof",
             message,
           });
-        } catch (e) {
-          console.warn(
-            "User rejected typed data signature, storing unsigned metadata"
-          );
+        } catch (sigErr) {
+          console.warn("Signature skipped", sigErr);
         }
       }
 
+      // 3. Store signature wrapper
       const signatureObj = {
         signer: address || "demo_user",
         domain,
@@ -226,45 +142,27 @@ This section covers important aspects of ${topic} that are relevant to the overa
       };
       const signatureCid = await uploadToIpfs(
         JSON.stringify(signatureObj, null, 2),
-        "signature.json",
-        "application/json"
+        "signature.json"
       );
 
       setSavedSummaryCid(summaryCid);
       setSavedSignatureCid(signatureCid);
       setSaveState("saved");
     } catch (e) {
-      console.error("Save error:", e);
+      console.error("Save error", e);
       setSaveState("error");
     }
-  };
-
-  const provenanceData = zkResult
-    ? {
-        model: "Llama 3.1 8B",
-        timestamp: new Date(zkResult.timestamp).toISOString(),
-        programHash: zkResult.programHash,
-        verified: true,
-      }
-    : undefined;
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
-      {/* Header */}
-      <header className="header">
-        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="logo-icon">🤖</div>
-            <h1 className="text-xl font-bold text-slate-800">AI Studio</h1>
-          </div>
+      <header className="border-b bg-white/70 backdrop-blur-sm">
+        <div className="max-w-4xl mx-auto px-6 h-16 flex items-center justify-between">
+          <h1 className="text-lg font-semibold text-slate-800">
+            AI Proof Demo
+          </h1>
           <div className="flex items-center gap-4">
-            <div className="hidden md:block verified-badge">
-              ✓ Verified Creator
-            </div>
-            <div
-              className="text-slate-600 hidden md:block"
-              suppressHydrationWarning
-            >
+            <div className="text-sm text-slate-600" suppressHydrationWarning>
               {mounted && isConnected
                 ? `${address?.slice(0, 6)}...${address?.slice(-4)}`
                 : "demo.eth"}
@@ -277,186 +175,106 @@ This section covers important aspects of ${topic} that are relevant to the overa
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-4 gap-8">
-        {/* Sidebar */}
-        <div className="lg:col-span-1">
-          <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
-            <h3 className="font-semibold text-slate-800 mb-4">Content Types</h3>
-            <ContentTypeSelector
-              selectedType={selectedType}
-              onTypeChange={setSelectedType}
-            />
-
-            <div className="mt-8 pt-6 border-t border-slate-200">
-              <h3 className="font-semibold text-slate-800 mb-3">Recent</h3>
-              <div className="space-y-2 text-sm text-slate-600">
-                <div className="flex items-center gap-2">
-                  📝 <span>DeFi Guide (2 min ago)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  📊 <span>Q3 Report (1 hour ago)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  💻 <span>React Component (3 hours ago)</span>
-                </div>
-              </div>
-            </div>
+      <main className="max-w-4xl mx-auto px-6 py-8">
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+          <div className="flex items-center gap-1 mb-6 bg-slate-100 rounded-lg p-1">
+            <button
+              onClick={() => setActiveTab("generate")}
+              className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition ${
+                activeTab === "generate"
+                  ? "bg-white shadow-sm text-slate-800"
+                  : "text-slate-600 hover:text-slate-800"
+              }`}
+            >
+              ✨ Generate
+            </button>
+            <button
+              onClick={() => setActiveTab("verify")}
+              className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition ${
+                activeTab === "verify"
+                  ? "bg-white shadow-sm text-slate-800"
+                  : "text-slate-600 hover:text-slate-800"
+              }`}
+            >
+              🔍 Verify
+            </button>
           </div>
-        </div>
 
-        {/* Main Workspace */}
-        <div className="lg:col-span-3">
-          <div className="bg-white rounded-xl p-8 shadow-sm border border-slate-200">
-            {/* Tab Navigation */}
-            <div className="flex items-center gap-1 mb-6 bg-slate-100 rounded-lg p-1">
-              <button
-                onClick={() => setActiveTab("generate")}
-                className={`flex-1 px-4 py-2 rounded-md font-medium transition-all ${
-                  activeTab === "generate"
-                    ? "bg-white text-slate-800 shadow-sm"
-                    : "text-slate-600 hover:text-slate-800"
-                }`}
-              >
-                ✨ Generate Content
-              </button>
-              <button
-                onClick={() => setActiveTab("verify")}
-                className={`flex-1 px-4 py-2 rounded-md font-medium transition-all ${
-                  activeTab === "verify"
-                    ? "bg-white text-slate-800 shadow-sm"
-                    : "text-slate-600 hover:text-slate-800"
-                }`}
-              >
-                🔍 Verify Content
-              </button>
-            </div>
-
-            {activeTab === "generate" ? (
-              <>
-                {/* Workspace Header */}
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-2xl font-bold text-slate-800">
-                    Create {getContentTypeTitle(selectedType)}
-                  </h2>
-                  <div className="bg-slate-100 px-4 py-2 rounded-lg text-sm text-slate-600 flex items-center gap-2">
-                    🧠 Llama 3.1 8B • Local
-                  </div>
-                </div>
-
-                {/* Input Area */}
-                <div className="mb-6">
-                  <label className="block font-semibold text-slate-700 mb-2">
-                    What would you like to create?
-                  </label>
-                  <textarea
-                    value={inputText}
-                    onChange={(e) => setInputText(e.target.value)}
-                    className="w-full h-32 p-4 border-2 border-slate-200 rounded-lg resize-none focus:border-blue-500 focus:outline-none transition-colors"
-                    placeholder="Describe what you want to create..."
-                  />
-                </div>
-
-                {/* Generate Section */}
-                <div className="flex gap-3 mb-4">
-                  <button
-                    onClick={handleGenerate}
-                    disabled={isGenerating || !inputText.trim()}
-                    className="generate-btn flex items-center gap-2"
-                  >
-                    {isGenerating ? "⏳ Generating..." : "✨ Generate Content"}
-                  </button>
-                </div>
-
+          {activeTab === "generate" ? (
+            <div>
+              <label className="block font-semibold text-slate-700 mb-2">
+                Input Text
+              </label>
+              <textarea
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                className="w-full h-32 p-4 border-2 border-slate-200 rounded-lg resize-none focus:border-blue-500 focus:outline-none transition-colors"
+                placeholder="Enter text to summarize..."
+              />
+              <div className="mt-4 flex gap-3">
+                <button
+                  onClick={handleGenerate}
+                  disabled={isGenerating || !inputText.trim()}
+                  className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isGenerating ? "⏳ Generating..." : "✨ Generate Summary"}
+                </button>
                 {zkResult && (
-                  <div className="mb-4 space-y-2 text-sm text-slate-600 bg-slate-50 p-4 rounded border border-slate-200">
-                    <div className="font-semibold text-slate-700">
-                      Generation Metadata
+                  <button
+                    onClick={handleSave}
+                    disabled={saveState === "saving"}
+                    className="px-5 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                  >
+                    {saveState === "saving"
+                      ? "⏳ Saving..."
+                      : saveState === "saved"
+                      ? "✅ Saved"
+                      : "💾 Save & Sign"}
+                  </button>
+                )}
+              </div>
+              {error && (
+                <div className="mt-3 text-sm text-red-600">{error}</div>
+              )}
+              {zkResult && (
+                <div className="mt-6 space-y-4">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 mb-1">
+                      Summary
                     </div>
+                    <pre className="whitespace-pre-wrap text-sm bg-slate-50 p-4 rounded border border-slate-200 font-mono">
+                      {zkResult.summary}
+                    </pre>
+                  </div>
+                  <div className="grid gap-2 text-xs bg-slate-50 p-4 rounded border border-slate-200 font-mono">
                     <div>Program Hash: {zkResult.programHash}</div>
                     <div>Input Hash: {zkResult.inputHash}</div>
                     <div>Output Hash: {zkResult.outputHash}</div>
+                    <div>Proof CID: {zkResult.zk.proofCid}</div>
+                    <div>Journal CID: {zkResult.zk.journalCid}</div>
                   </div>
-                )}
-
-                {/* Output Area */}
-                <OutputArea
-                  content={outputContent}
-                  isGenerating={isGenerating}
-                  provenanceData={provenanceData}
-                  onShare={() => setShowShareModal(true)}
-                  onCopy={() => navigator.clipboard.writeText(outputContent)}
-                  onExport={() => console.log("Export placeholder")}
-                />
-
-                {zkResult && (
-                  <div className="mt-6">
-                    <button
-                      onClick={handleSave}
-                      disabled={saveState === "saving"}
-                      className="px-6 py-3 rounded-lg font-semibold bg-gradient-to-r from-green-600 to-emerald-600 text-white hover:from-green-700 hover:to-emerald-700 disabled:opacity-60"
-                    >
-                      {saveState === "saving"
-                        ? "⏳ Saving..."
-                        : saveState === "saved"
-                        ? "✅ Saved"
-                        : "💾 Save & Sign"}
-                    </button>
-                    {saveState === "error" && (
-                      <div className="mt-2 text-sm text-red-600">
-                        Save failed. Check console.
-                      </div>
-                    )}
-                    {(savedSummaryCid || savedSignatureCid) && (
-                      <div className="mt-4 text-sm bg-slate-50 border border-slate-200 rounded p-4 space-y-1">
-                        <div className="font-semibold text-slate-700">
-                          Stored CIDs
-                        </div>
-                        {savedSummaryCid && (
-                          <div>
-                            Summary CID:{" "}
-                            <span className="font-mono break-all">
-                              {savedSummaryCid}
-                            </span>
-                          </div>
-                        )}
-                        {savedSignatureCid && (
-                          <div>
-                            Signature CID:{" "}
-                            <span className="font-mono break-all">
-                              {savedSignatureCid}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </>
-            ) : (
-              /* Verification Panel */
-              <VerificationPanel onVerify={handleVerify} />
-            )}
-          </div>
+                  {(savedSummaryCid || savedSignatureCid) && (
+                    <div className="text-xs bg-emerald-50 border border-emerald-200 p-4 rounded space-y-1 font-mono">
+                      {savedSummaryCid && (
+                        <div>Summary CID: {savedSummaryCid}</div>
+                      )}
+                      {savedSignatureCid && (
+                        <div>Signature CID: {savedSignatureCid}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <VerificationPanel
+              onVerify={() => {
+                /* handled internally */
+              }}
+            />
+          )}
         </div>
-      </div>
-
-      {/* Share Modal */}
-      {showShareModal && (
-        <ShareModal
-          isOpen={showShareModal}
-          onClose={() => setShowShareModal(false)}
-          contentCids={
-            zkResult
-              ? {
-                  encryptedCid: zkResult.zk.proofCid,
-                  summaryCid: zkResult.zk.journalCid,
-                  signatureCid: zkResult.programHash,
-                }
-              : undefined
-          }
-          provenanceData={provenanceData}
-        />
-      )}
+      </main>
     </div>
   );
 }

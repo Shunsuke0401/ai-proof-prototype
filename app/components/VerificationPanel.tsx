@@ -1,11 +1,7 @@
 import { useState } from "react";
 
 interface VerificationInputProps {
-  onVerify: (
-    summaryCid: string,
-    signatureCid: string,
-    programHash?: string
-  ) => void;
+  onVerify: (summaryCid: string, signatureCid: string) => void;
 }
 
 interface VerificationResult {
@@ -26,7 +22,6 @@ export default function VerificationPanel({
 }: VerificationInputProps) {
   const [summaryCid, setSummaryCid] = useState("");
   const [signatureCid, setSignatureCid] = useState("");
-  const [programHash, setProgramHash] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [verificationResult, setVerificationResult] =
     useState<VerificationResult | null>(null);
@@ -54,7 +49,6 @@ export default function VerificationPanel({
         body: JSON.stringify({
           summaryCid: summaryCid.trim(),
           signatureCid: signatureCid.trim(),
-          programHash: programHash.trim() || undefined,
         }),
       });
 
@@ -66,7 +60,7 @@ export default function VerificationPanel({
           message: result.message || "Verification completed successfully!",
           details: result.details,
         });
-        onVerify(summaryCid, signatureCid, programHash || undefined);
+        onVerify(summaryCid, signatureCid);
       } else {
         setVerificationResult({
           status: "error",
@@ -88,7 +82,7 @@ export default function VerificationPanel({
   const handleClearInputs = () => {
     setSummaryCid("");
     setSignatureCid("");
-    setProgramHash("");
+    // program hash removed
     setVerificationResult(null);
   };
 
@@ -151,20 +145,7 @@ export default function VerificationPanel({
           />
         </div>
 
-        {/* Program Hash Input (Optional) */}
-        <div>
-          <label className="block font-semibold text-slate-700 mb-2">
-            Expected Program Hash{" "}
-            <span className="text-slate-500">(optional)</span>
-          </label>
-          <input
-            type="text"
-            value={programHash}
-            onChange={(e) => setProgramHash(e.target.value)}
-            placeholder="abc123... (Expected hash of the AI model/program)"
-            className="w-full p-3 border-2 border-slate-200 rounded-lg focus:border-blue-500 focus:outline-none transition-colors"
-          />
-        </div>
+        {/* Program hash input removed for simplified flow */}
 
         {/* Action Buttons */}
         <div className="flex gap-3 pt-2">
