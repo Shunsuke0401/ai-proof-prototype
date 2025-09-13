@@ -211,7 +211,7 @@ export default function AIStudio() {
                 className="w-full h-32 p-4 border-2 border-slate-200 rounded-lg resize-none focus:border-blue-500 focus:outline-none transition-colors"
                 placeholder="Enter text to summarize..."
               />
-              <div className="mt-4 flex gap-3">
+              <div className="mt-4">
                 <button
                   onClick={handleGenerate}
                   disabled={isGenerating || !inputText.trim()}
@@ -219,25 +219,13 @@ export default function AIStudio() {
                 >
                   {isGenerating ? "⏳ Generating..." : "✨ Generate Summary"}
                 </button>
-                {zkResult && (
-                  <button
-                    onClick={handleSave}
-                    disabled={saveState === "saving"}
-                    className="px-5 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-                  >
-                    {saveState === "saving"
-                      ? "⏳ Saving..."
-                      : saveState === "saved"
-                      ? "✅ Saved"
-                      : "💾 Save & Sign"}
-                  </button>
-                )}
               </div>
               {error && (
                 <div className="mt-3 text-sm text-red-600">{error}</div>
               )}
               {zkResult && (
-                <div className="mt-6 space-y-4">
+                <div className="mt-6 space-y-5">
+                  {/* Summary Block */}
                   <div>
                     <div className="text-sm font-semibold text-slate-700 mb-1">
                       Summary
@@ -246,15 +234,40 @@ export default function AIStudio() {
                       {zkResult.summary}
                     </pre>
                   </div>
+
+                  {/* Metadata / ZK (mock) Panel */}
                   <div className="grid gap-2 text-xs bg-slate-50 p-4 rounded border border-slate-200 font-mono">
+                    <div className="font-semibold text-slate-700 mb-1 normal-case tracking-normal">
+                      Generation Metadata (mock ZK)
+                    </div>
                     <div>Program Hash: {zkResult.programHash}</div>
                     <div>Input Hash: {zkResult.inputHash}</div>
                     <div>Output Hash: {zkResult.outputHash}</div>
-                    <div>Proof CID: {zkResult.zk.proofCid}</div>
+                    <div>Encrypted CID: {zkResult.zk.proofCid}</div>
                     <div>Journal CID: {zkResult.zk.journalCid}</div>
                   </div>
+
+                  {/* Save & Sign */}
+                  <div>
+                    <button
+                      onClick={handleSave}
+                      disabled={saveState === "saving"}
+                      className="px-5 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {saveState === "saving"
+                        ? "⏳ Saving..."
+                        : saveState === "saved"
+                        ? "✅ Saved"
+                        : "💾 Save & Sign"}
+                    </button>
+                  </div>
+
+                  {/* Stored Artifact CIDs */}
                   {(savedSummaryCid || savedSignatureCid) && (
                     <div className="text-xs bg-emerald-50 border border-emerald-200 p-4 rounded space-y-1 font-mono">
+                      <div className="font-semibold text-emerald-700 mb-1">
+                        Stored Artifacts
+                      </div>
                       {savedSummaryCid && (
                         <div>Summary CID: {savedSummaryCid}</div>
                       )}
