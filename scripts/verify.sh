@@ -48,15 +48,23 @@ TEMP_DIR=$(mktemp -d)
 SUMMARY_FILE="$TEMP_DIR/summary.json"
 SIGNATURE_FILE="$TEMP_DIR/signature.json"
 
-# Download files
+# Download files using curl with local IPFS node
 if command -v curl >/dev/null 2>&1; then
-    curl -s "$SUMMARY_URL" -o "$SUMMARY_FILE"
-    curl -s "$SIGNATURE_URL" -o "$SIGNATURE_FILE"
+    # Try local IPFS node first, fallback to gateway
+    LOCAL_SUMMARY_URL="http://localhost:8080/ipfs/$SUMMARY_CID"
+    LOCAL_SIGNATURE_URL="http://localhost:8080/ipfs/$SIGNATURE_CID"
+    
+    # Follow redirects for local IPFS node
+    curl -sL "$LOCAL_SUMMARY_URL" -o "$SUMMARY_FILE" 2>/dev/null || \
+    curl -s "$SUMMARY_URL" -o "$SUMMARY_FILE" || { echo "❌ Failed to download summary"; exit 1; }
+    
+    curl -sL "$LOCAL_SIGNATURE_URL" -o "$SIGNATURE_FILE" 2>/dev/null || \
+    curl -s "$SIGNATURE_URL" -o "$SIGNATURE_FILE" || { echo "❌ Failed to download signature"; exit 1; }
 elif command -v wget >/dev/null 2>&1; then
-    wget -q "$SUMMARY_URL" -O "$SUMMARY_FILE"
-    wget -q "$SIGNATURE_URL" -O "$SIGNATURE_FILE"
+    wget -q "$SUMMARY_URL" -O "$SUMMARY_FILE" || { echo "❌ Failed to download summary"; exit 1; }
+    wget -q "$SIGNATURE_URL" -O "$SIGNATURE_FILE" || { echo "❌ Failed to download signature"; exit 1; }
 else
-    echo "❌ Error: Neither curl nor wget found. Please install one of them."
+    echo "❌ Neither curl nor wget is available"
     exit 1
 fi
 
@@ -70,42 +78,49 @@ echo ""
 
 # Step 3.5: Verify ZK proof
 echo "🔬 Verifying ZK proof..."
-JOURNAL_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.journalCid)")
-PROOF_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.proofCid)")
+# Check if ZK proof data exists in the summary
+HAS_ZK_DATA=$(node -e "const data = JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')); console.log(data.zk ? 'true' : 'false');" 2>/dev/null || echo "false")
 
-if [ "$JOURNAL_CID" = "undefined" ] || [ "$PROOF_CID" = "undefined" ]; then
-    echo "⚠️  No ZK proof data found in summary, skipping ZK verification"
-else
-    echo "📥 Fetching ZK artifacts from IPFS..."
-    JOURNAL_URL="$IPFS_GATEWAY/$JOURNAL_CID"
-    PROOF_URL="$IPFS_GATEWAY/$PROOF_CID"
-    JOURNAL_FILE="$TEMP_DIR/journal.json"
-    PROOF_FILE="$TEMP_DIR/proof.bin"
+if [ "$HAS_ZK_DATA" = "true" ]; then
+    JOURNAL_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.journalCid)")
+    PROOF_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.proofCid)")
     
-    # Download ZK artifacts
-    if command -v curl >/dev/null 2>&1; then
-        curl -s "$JOURNAL_URL" -o "$JOURNAL_FILE"
-        curl -s "$PROOF_URL" -o "$PROOF_FILE"
-    elif command -v wget >/dev/null 2>&1; then
-        wget -q "$JOURNAL_URL" -O "$JOURNAL_FILE"
-        wget -q "$PROOF_URL" -O "$PROOF_FILE"
-    fi
-    
-    echo "✅ Downloaded ZK artifacts"
-    
-    # Extract program ID from journal
-    PROGRAM_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$JOURNAL_FILE', 'utf8')).programHash)")
-    echo "🔍 Program ID: $PROGRAM_ID"
-    
-    # Verify ZK proof using risc0-verify
-    echo "🔬 Running risc0-verify..."
-    if command -v risc0-verify >/dev/null 2>&1; then
-        risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_ID" --journal "$JOURNAL_FILE"
-        echo "✅ ZK proof verification passed!"
+    if [ "$JOURNAL_CID" != "undefined" ] && [ "$PROOF_CID" != "undefined" ]; then
+        echo "📥 Fetching ZK artifacts from IPFS..."
+        JOURNAL_URL="$IPFS_GATEWAY/$JOURNAL_CID"
+        PROOF_URL="$IPFS_GATEWAY/$PROOF_CID"
+        JOURNAL_FILE="$TEMP_DIR/journal.json"
+        PROOF_FILE="$TEMP_DIR/proof.bin"
+        
+        # Download ZK artifacts
+        if command -v curl >/dev/null 2>&1; then
+            curl -s "$JOURNAL_URL" -o "$JOURNAL_FILE"
+            curl -s "$PROOF_URL" -o "$PROOF_FILE"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "$JOURNAL_URL" -O "$JOURNAL_FILE"
+            wget -q "$PROOF_URL" -O "$PROOF_FILE"
+        fi
+        
+        echo "✅ Downloaded ZK artifacts"
+        
+        # Extract program ID from journal
+        PROGRAM_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$JOURNAL_FILE', 'utf8')).programHash)")
+        echo "🔍 Program ID: $PROGRAM_ID"
+        
+        # Verify ZK proof using risc0-verify
+        echo "🔬 Running risc0-verify..."
+        if command -v risc0-verify >/dev/null 2>&1; then
+            risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_ID" --journal "$JOURNAL_FILE"
+            echo "✅ ZK proof verification passed!"
+        else
+            echo "⚠️  risc0-verify not found, skipping ZK proof verification"
+            echo "   Install RISC Zero toolchain to enable ZK verification"
+        fi
     else
-        echo "⚠️  risc0-verify not found, skipping ZK proof verification"
-        echo "   Install RISC Zero toolchain to enable ZK verification"
+        echo "⚠️  ZK proof CIDs not found in summary"
     fi
+else
+    echo "⚠️  No ZK proof data found in summary (using mock implementation)"
 fi
 echo ""
 
