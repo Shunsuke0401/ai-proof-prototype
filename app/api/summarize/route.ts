@@ -5,8 +5,9 @@ import { join } from 'path';
 import { addFile } from '../../../api/ipfs';
 import { domain, types, SaveProof, ErrorResponse } from '../../../api/types';
 
-const ZK_HOST_BINARY = '/app/bin/zkhost';
-const TEMP_DIR = '/tmp';
+// Use local development path or Docker path based on environment
+const ZK_HOST_BINARY = process.env.NODE_ENV === 'production' ? '/app/bin/zkhost' : './zk/target/release/zkhost';
+const TEMP_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : './zk';
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +19,35 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Input size validation for real ZK proofs (2-4KB limit)
+    const textSizeBytes = Buffer.byteLength(text, 'utf8');
+    const maxSizeBytes = 4 * 1024; // 4KB
+    const minSizeBytes = 10; // Minimum 10 bytes
+    
+    if (textSizeBytes > maxSizeBytes) {
+      return NextResponse.json(
+        { 
+          error: `Input text too large: ${textSizeBytes} bytes. Maximum allowed: ${maxSizeBytes} bytes (4KB) for real ZK proof generation.`,
+          inputSize: textSizeBytes,
+          maxSize: maxSizeBytes
+        },
+        { status: 413 }
+      );
+    }
+    
+    if (textSizeBytes < minSizeBytes) {
+      return NextResponse.json(
+        { 
+          error: `Input text too small: ${textSizeBytes} bytes. Minimum required: ${minSizeBytes} bytes.`,
+          inputSize: textSizeBytes,
+          minSize: minSizeBytes
+        },
+        { status: 400 }
+      );
+    }
+    
+    console.log(`📏 Input validation passed: ${textSizeBytes} bytes (${(textSizeBytes/1024).toFixed(2)}KB)`);
 
     const timestamp = new Date().toISOString();
     const sessionId = `zk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -35,8 +65,9 @@ export async function POST(request: NextRequest) {
       console.log(`🔬 Running ZK proof generation for session ${sessionId}`);
       
       // Check if ZK generation should be mocked
-      const useMockZK = process.env.MOCK_ZK === 'true';
-      console.log(`🔧 Environment check: MOCK_ZK=${process.env.MOCK_ZK}, useMockZK=${useMockZK}`);
+      // Default to mock in development environment to avoid build issues
+      const useMockZK = process.env.MOCK_ZK !== 'false' && process.env.NODE_ENV !== 'production';
+      console.log(`🔧 Environment check: MOCK_ZK=${process.env.MOCK_ZK}, NODE_ENV=${process.env.NODE_ENV}, useMockZK=${useMockZK}`);
       
       let zkResult;
       if (useMockZK) {
@@ -59,6 +90,16 @@ export async function POST(request: NextRequest) {
       
       console.log(`📊 Generated proof: ${proofBytes.length} bytes`);
       console.log(`📄 Journal data:`, journalData);
+      
+      // Validate proof size for real ZK proofs (should be hundreds of KB+)
+      if (!useMockZK) {
+        const minProofSize = 50 * 1024; // 50KB minimum for real proofs
+        if (proofBytes.length < minProofSize) {
+          console.error(`❌ Proof too small: ${proofBytes.length} bytes < ${minProofSize} bytes`);
+          throw new Error(`Generated proof is too small (${proofBytes.length} bytes). Real ZK proofs should be at least ${minProofSize} bytes. This suggests the proof generation failed or is using dev mode.`);
+        }
+        console.log(`✅ Proof size validation passed: ${proofBytes.length} bytes (${(proofBytes.length/1024).toFixed(2)}KB)`);
+      }
       
       // Upload journal and proof to IPFS
       const [journalCid, proofCid] = await Promise.all([
@@ -150,7 +191,7 @@ function runZKHost(inputFile: string, journalFile: string, proofFile: string): P
       stdio: ['pipe', 'pipe', 'pipe']
     });
     
-    // Set 8-minute timeout for ZK proof generation
+    // Set 3-minute timeout for real ZK proof generation
     const timeoutId = setTimeout(() => {
       console.log('⏰ ZK proof generation timeout, killing process...');
       process.kill('SIGTERM');
@@ -159,8 +200,8 @@ function runZKHost(inputFile: string, journalFile: string, proofFile: string): P
           process.kill('SIGKILL');
         }
       }, 5000);
-      resolve({ success: false, error: 'ZK proof generation timed out after 8 minutes' });
-    }, 480000); // 8 minutes
+      resolve({ success: false, error: 'ZK proof generation timed out after 3 minutes' });
+    }, 180000); // 3 minutes (180 seconds)
     
     let stdout = '';
     let stderr = '';

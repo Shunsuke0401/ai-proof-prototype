@@ -22,10 +22,15 @@ ENV CXX=clang++
 # Install RISC Zero toolchain in builder stage
 RUN cargo install cargo-risczero
 
-# Copy ZK source code and build
+# Copy ZK source code and build with native CPU optimization
 COPY zk/ /app/zk/
 WORKDIR /app/zk
-RUN cargo build --release
+
+# Set RUSTFLAGS for native CPU optimization (Apple M3 Pro optimized)
+ENV RUSTFLAGS="-C target-cpu=native"
+
+# Build guest and host in release mode
+RUN cargo build --release -p guest -p host
 
 # Production stage with Node.js
 FROM node:20.11.1-bullseye as production

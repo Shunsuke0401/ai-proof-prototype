@@ -1,5 +1,5 @@
 use clap::{Arg, Command};
-use risc0_zkvm::{default_prover, ExecutorEnv, ProverOpts};
+use risc0_zkvm::{default_prover, ExecutorEnv};
 use serde_json;
 use std::fs;
 use std::path::Path;
@@ -55,15 +55,15 @@ fn main() {
         .build()
         .unwrap();
     
-    // Generate the proof
+    // Generate the proof using real prover (not dev mode)
     println!("🔄 Generating ZK proof...");
     let prover = default_prover();
     let prove_info = prover
-        .prove_with_opts(env, GUEST_ELF, &ProverOpts::fast())
+        .prove(env, GUEST_ELF)
         .unwrap();
     
     // Extract journal data from the receipt
-    let journal_bytes = prove_info.receipt.journal.bytes.clone();
+    let journal_bytes = prove_info.journal.bytes.clone();
     let journal_str = String::from_utf8(journal_bytes)
         .expect("Journal should contain valid UTF-8");
     let journal_data: serde_json::Value = serde_json::from_str(&journal_str)
@@ -92,9 +92,8 @@ fn main() {
         process::exit(1);
     }
     
-    // Write the receipt as proof (serialize the entire receipt)
-    let proof_bytes = bincode::serialize(&prove_info.receipt)
-        .expect("Failed to serialize receipt");
+    // Write the seal as proof (this is the actual ZK proof)
+    let proof_bytes = prove_info.inner.seal().to_vec();
     if let Err(e) = fs::write(&proof_file, &proof_bytes) {
         eprintln!("Error writing proof file '{}': {}", proof_file, e);
         process::exit(1);

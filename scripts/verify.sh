@@ -126,14 +126,26 @@ if [ "$HAS_ZK_DATA" = "true" ]; then
         if [ -n "$PROGRAM_HASH" ]; then
             echo "🔍 Program Hash: $PROGRAM_HASH"
             
-            # Verify ZK proof using risc0-verify
+            # Verify ZK proof using risc0-verify (real proof validation)
             if command -v risc0-verify >/dev/null 2>&1; then
                 echo "🔬 Running risc0-verify with RISC Zero toolchain..."
                 echo "   Command: risc0-verify --proof $PROOF_FILE --image $PROGRAM_HASH --journal $JOURNAL_FILE"
                 
-                if risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_HASH" --journal "$JOURNAL_FILE" 2>&1; then
+                # Capture output to check for dev-mode warnings
+                VERIFY_OUTPUT=$(risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_HASH" --journal "$JOURNAL_FILE" 2>&1)
+                VERIFY_EXIT_CODE=$?
+                
+                echo "$VERIFY_OUTPUT"
+                
+                if [ $VERIFY_EXIT_CODE -eq 0 ]; then
+                    # Check for dev-mode warnings in output
+                    if echo "$VERIFY_OUTPUT" | grep -i "dev.*mode\|development\|mock" >/dev/null 2>&1; then
+                        echo "❌ ZK proof verification detected dev-mode or mock proof!"
+                        echo "❌ Real ZK proofs are required for production verification"
+                        exit 1
+                    fi
                     echo "✅ ZK proof verification successful!"
-                    echo "✅ Computational integrity proven"
+                    echo "✅ Real computational integrity proven (no dev-mode detected)"
                 else
                     echo "❌ ZK proof verification failed!"
                     echo "❌ Either the proof is invalid or the program hash doesn't match"

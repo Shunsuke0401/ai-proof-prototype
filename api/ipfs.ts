@@ -6,7 +6,28 @@
  * Add a file to IPFS using HTTP API directly
  */
 export async function addFile(file: Blob | File | Uint8Array): Promise<string> {
-  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
+  // Use mock IPFS for development to avoid network issues
+  if (process.env.NODE_ENV !== 'production') {
+    // Generate a mock CID based on content hash
+    let content: Uint8Array;
+    if (file instanceof Uint8Array) {
+      content = file;
+    } else {
+      content = new Uint8Array(await file.arrayBuffer());
+    }
+    
+    // Simple hash function for mock CID
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+      hash = ((hash << 5) - hash + content[i]) & 0xffffffff;
+    }
+    const mockCid = `Qm${Math.abs(hash).toString(36).padStart(44, '0')}`;
+    console.log(`🔧 Mock IPFS: Generated CID ${mockCid} for ${content.length} bytes`);
+    return mockCid;
+  }
+  
+  // Production IPFS upload
+  const ipfsUrl = process.env.NEXT_PUBLIC_IPFS_API_URL || 'http://ipfs:5001';
   
   let content: Uint8Array;
   
@@ -44,7 +65,9 @@ export async function addJson(data: any): Promise<string> {
  * Get a file from IPFS using HTTP API
  */
 export async function getFile(cid: string): Promise<Uint8Array> {
-  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
+  // Use public IPFS gateway for development, Docker service for production
+  const ipfsUrl = process.env.NEXT_PUBLIC_IPFS_API_URL || 
+    (process.env.NODE_ENV === 'production' ? 'http://ipfs:5001' : 'https://ipfs.infura.io:5001');
   
   const response = await fetch(`${ipfsUrl}/api/v0/cat?arg=${cid}`, {
     method: 'POST'
@@ -71,7 +94,9 @@ export async function getJson(cid: string): Promise<any> {
  * Pin a file in IPFS using HTTP API
  */
 export async function pinFile(cid: string): Promise<void> {
-  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
+  // Use public IPFS gateway for development, Docker service for production
+  const ipfsUrl = process.env.NEXT_PUBLIC_IPFS_API_URL || 
+    (process.env.NODE_ENV === 'production' ? 'http://ipfs:5001' : 'https://ipfs.infura.io:5001');
   
   const response = await fetch(`${ipfsUrl}/api/v0/pin/add?arg=${cid}`, {
     method: 'POST'
