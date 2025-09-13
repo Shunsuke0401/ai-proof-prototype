@@ -2,21 +2,11 @@
  * IPFS client and upload utilities
  */
 
-import { create, IPFSHTTPClient } from 'ipfs-http-client';
-
 /**
- * Get IPFS client instance (server-side only)
- */
-export function getIpfs(): IPFSHTTPClient {
-  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
-  return create({ url: ipfsUrl });
-}
-
-/**
- * Add a file to IPFS
+ * Add a file to IPFS using HTTP API directly
  */
 export async function addFile(file: Blob | File | Uint8Array): Promise<string> {
-  const ipfs = getIpfs();
+  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
   
   let content: Uint8Array;
   
@@ -26,58 +16,70 @@ export async function addFile(file: Blob | File | Uint8Array): Promise<string> {
     content = new Uint8Array(await file.arrayBuffer());
   }
   
-  const result = await ipfs.add(content);
-  return result.cid.toString();
+  const formData = new FormData();
+  formData.append('file', new Blob([content]));
+  
+  const response = await fetch(`${ipfsUrl}/api/v0/add`, {
+    method: 'POST',
+    body: formData
+  });
+  
+  if (!response.ok) {
+    throw new Error(`IPFS upload failed: ${response.statusText}`);
+  }
+  
+  const result = await response.json();
+  return result.Hash;
 }
 
 /**
  * Add JSON data to IPFS
  */
 export async function addJson(data: any): Promise<string> {
-  const jsonString = JSON.stringify(data, null, 2);
-  const content = new TextEncoder().encode(jsonString);
+  const content = new TextEncoder().encode(JSON.stringify(data));
   return addFile(content);
 }
 
 /**
- * Retrieve file from IPFS
+ * Get a file from IPFS using HTTP API
  */
 export async function getFile(cid: string): Promise<Uint8Array> {
-  const ipfs = getIpfs();
-  const chunks: Uint8Array[] = [];
+  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
   
-  for await (const chunk of ipfs.cat(cid)) {
-    chunks.push(chunk as Uint8Array);
+  const response = await fetch(`${ipfsUrl}/api/v0/cat?arg=${cid}`, {
+    method: 'POST'
+  });
+  
+  if (!response.ok) {
+    throw new Error(`IPFS get failed: ${response.statusText}`);
   }
   
-  // Concatenate all chunks
-  const totalLength = chunks.reduce((acc, chunk) => acc + chunk.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  
-  return result;
+  const arrayBuffer = await response.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 }
 
 /**
- * Retrieve JSON data from IPFS
+ * Get JSON data from IPFS
  */
 export async function getJson(cid: string): Promise<any> {
   const data = await getFile(cid);
-  const jsonString = new TextDecoder().decode(data);
-  return JSON.parse(jsonString);
+  const text = new TextDecoder().decode(data);
+  return JSON.parse(text);
 }
 
 /**
- * Pin a file to ensure it stays available
+ * Pin a file in IPFS using HTTP API
  */
 export async function pinFile(cid: string): Promise<void> {
-  const ipfs = getIpfs();
-  await ipfs.pin.add(cid);
+  const ipfsUrl = process.env.IPFS_API_URL || 'http://localhost:5001';
+  
+  const response = await fetch(`${ipfsUrl}/api/v0/pin/add?arg=${cid}`, {
+    method: 'POST'
+  });
+  
+  if (!response.ok) {
+    throw new Error(`IPFS pin failed: ${response.statusText}`);
+  }
 }
 
 /**

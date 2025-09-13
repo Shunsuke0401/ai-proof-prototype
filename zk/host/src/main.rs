@@ -1,114 +1,110 @@
-use clap::Parser;
-use risc0_zkvm::{default_prover, ExecutorEnv};
-use serde::{Deserialize, Serialize};
+use clap::{Arg, Command};
+use risc0_zkvm::{default_prover, ExecutorEnv, ProverOpts};
+use serde_json;
 use std::fs;
-use std::io::Write;
-use std::path::PathBuf;
+use std::path::Path;
+use std::process;
 
-// Include the guest binary
-risc0_zkvm::include_image!("guest");
+// Include the guest methods
+mod methods;
+use methods::{GUEST_ELF, guest_id};
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Keyword {
-    word: String,
-    count: u32,
-}
+fn main() {
+    let matches = Command::new("zkhost")
+        .about("RISC Zero host runner for deterministic summarization")
+        .arg(
+            Arg::new("input")
+                .long("in")
+                .value_name("FILE")
+                .help("Input text file")
+                .required(true),
+        )
+        .arg(
+            Arg::new("output")
+                .long("out")
+                .value_name("FILE")
+                .help("Output journal JSON file")
+                .required(true),
+        )
+        .arg(
+            Arg::new("proof")
+                .long("proof")
+                .value_name("FILE")
+                .help("Output proof binary file")
+                .required(true),
+        )
+        .get_matches();
 
-#[derive(Serialize, Deserialize, Debug)]
-struct JournalOutput {
-    #[serde(rename = "programHash")]
-    program_hash: String,
-    #[serde(rename = "inputHash")]
-    input_hash: String,
-    #[serde(rename = "outputHash")]
-    output_hash: String,
-    keywords: Vec<Keyword>,
-}
+    let input_file = matches.get_one::<String>("input").unwrap();
+    let output_file = matches.get_one::<String>("output").unwrap();
+    let proof_file = matches.get_one::<String>("proof").unwrap();
 
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// Input text file
-    #[arg(long)]
-    input: PathBuf,
-    
-    /// Output journal JSON file
-    #[arg(long)]
-    out: PathBuf,
-    
-    /// Output proof binary file
-    #[arg(long)]
-    proof: PathBuf,
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
-    
-    // Read input text
-    let input_text = fs::read_to_string(&args.input)
-        .map_err(|e| format!("Failed to read input file: {}", e))?;
-    
-    // Create executor environment with stdin
-    let env = ExecutorEnv::builder()
-        .write_slice(&input_text.as_bytes())
-        .build()
-        .map_err(|e| format!("Failed to build executor environment: {}", e))?;
-    
-    // Get the default prover
-    let prover = default_prover();
-    
-    // Execute the guest program and generate proof
-    let receipt = prover
-        .prove(env, GUEST_ELF)
-        .map_err(|e| format!("Failed to prove: {}", e))?;
-    
-    // Verify the receipt
-    receipt
-        .verify(GUEST_ID)
-        .map_err(|e| format!("Failed to verify receipt: {}", e))?;
-    
-    // Extract journal from receipt
-    let journal: JournalOutput = receipt
-        .journal
-        .decode()
-        .map_err(|e| format!("Failed to decode journal: {}", e))?;
-    
-    // Fill in the actual program hash (image ID)
-    let program_hash = format!("{:x}", GUEST_ID);
-    let final_journal = JournalOutput {
-        program_hash,
-        input_hash: journal.input_hash,
-        output_hash: journal.output_hash,
-        keywords: journal.keywords,
+    // Read input file bytes
+    let input_bytes = match fs::read(input_file) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("Error reading input file '{}': {}", input_file, e);
+            process::exit(1);
+        }
     };
+
+    // Create execution environment with input data
+    let env = ExecutorEnv::builder()
+        .write(&input_bytes)
+        .unwrap()
+        .build()
+        .unwrap();
     
-    // Ensure output directories exist
-    if let Some(parent) = args.out.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create output directory: {}", e))?;
+    // Generate the proof
+    println!("🔄 Generating ZK proof...");
+    let prover = default_prover();
+    let prove_info = prover
+        .prove_with_opts(env, GUEST_ELF, &ProverOpts::fast())
+        .unwrap();
+    
+    // Extract journal data from the receipt
+    let journal_bytes = prove_info.receipt.journal.bytes.clone();
+    let journal_str = String::from_utf8(journal_bytes)
+        .expect("Journal should contain valid UTF-8");
+    let journal_data: serde_json::Value = serde_json::from_str(&journal_str)
+        .expect("Journal should contain valid JSON");
+    
+    // Create output directory if it doesn't exist
+    if let Some(parent) = Path::new(output_file).parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("Error creating output directory: {}", e);
+            process::exit(1);
+        }
     }
-    if let Some(parent) = args.proof.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create proof directory: {}", e))?;
+    if let Some(parent) = Path::new(proof_file).parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("Error creating proof directory: {}", e);
+            process::exit(1);
+        }
     }
     
-    // Write journal to file
-    let journal_json = serde_json::to_string_pretty(&final_journal)
-        .map_err(|e| format!("Failed to serialize journal: {}", e))?;
-    fs::write(&args.out, journal_json)
-        .map_err(|e| format!("Failed to write journal file: {}", e))?;
+    // Write journal data
+    let journal_json = serde_json::to_string_pretty(&journal_data).unwrap();
+    let journal_json_len = journal_json.len();
     
-    // Write proof to file
-    let proof_bytes = risc0_binfmt::encode(&receipt)
-        .map_err(|e| format!("Failed to encode receipt: {}", e))?;
-    fs::write(&args.proof, proof_bytes)
-        .map_err(|e| format!("Failed to write proof file: {}", e))?;
+    if let Err(e) = fs::write(&output_file, journal_json) {
+        eprintln!("Error writing journal file '{}': {}", output_file, e);
+        process::exit(1);
+    }
     
-    println!("ZK proof generated successfully!");
-    println!("Journal: {}", args.out.display());
-    println!("Proof: {}", args.proof.display());
-    println!("Program Hash: {}", final_journal.program_hash);
+    // Write the receipt as proof (serialize the entire receipt)
+    let proof_bytes = bincode::serialize(&prove_info.receipt)
+        .expect("Failed to serialize receipt");
+    if let Err(e) = fs::write(&proof_file, &proof_bytes) {
+        eprintln!("Error writing proof file '{}': {}", proof_file, e);
+        process::exit(1);
+    }
     
-    Ok(())
+    println!("✅ ZK proof generated successfully!");
+    println!("📄 Journal: {} ({} bytes)", output_file, journal_json_len);
+    println!("🔒 Proof: {} ({} bytes)", proof_file, proof_bytes.len());
+    
+    // Convert guest ID to hex string
+    let guest_id_digest = guest_id();
+    println!("🎯 Image ID: {}", guest_id_digest);
 }
