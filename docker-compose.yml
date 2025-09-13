@@ -7,6 +7,8 @@ services:
       - OLLAMA_API_URL=http://ollama:11434
       - IPFS_API_URL=http://ipfs:5001
       - NEXT_PUBLIC_IPFS_GATEWAY=http://localhost:8080/ipfs
+      # Add internal gateway for server-side verification (app container cannot use localhost:8080 for IPFS)
+      - IPFS_GATEWAYS=http://ipfs:8080/ipfs,https://ipfs.io/ipfs,https://cloudflare-ipfs.com/ipfs
     depends_on:
       - ollama
       - ipfs
@@ -25,9 +27,9 @@ services:
   ipfs:
     image: ipfs/kubo:latest
     ports:
-      - "4001:4001"    # IPFS swarm port
-      - "5001:5001"    # IPFS API port
-      - "8080:8080"    # IPFS gateway port
+      - "4001:4001" # IPFS swarm port
+      - "5001:5001" # IPFS API port
+      - "8080:8080" # IPFS gateway port
     volumes:
       - ipfs_data:/data/ipfs
     environment:
