@@ -34,8 +34,10 @@ ENV RUSTFLAGS="-C target-cpu=native"
 
 # Build guest and host in release mode (or create stub if disabled)
 RUN if [ "$BUILD_ZK" = "1" ]; then \
-            echo "[zk] Building guest + host (release)" && \
-            cargo build --release -p guest -p host ; \
+            echo "[zk] Building guest first" && \
+            cargo build --release -p guest && \
+            echo "[zk] Building host" && \
+            cargo build --release -p host ; \
         else \
             echo "[zk] Skipping ZK build (BUILD_ZK!=1), creating stub" && \
             mkdir -p /app/zk/target/release && \

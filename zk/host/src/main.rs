@@ -93,7 +93,7 @@ fn main() {
     }
     
     // Write the seal as proof (this is the actual ZK proof)
-    let proof_bytes = prove_info.inner.seal().to_vec();
+    let proof_bytes = bincode::serialize(&prove_info).unwrap();
     if let Err(e) = fs::write(&proof_file, &proof_bytes) {
         eprintln!("Error writing proof file '{}': {}", proof_file, e);
         process::exit(1);

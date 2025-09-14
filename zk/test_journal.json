@@ -1,10 +1,27 @@
 {
-  "filtered_words": [
-    "test",
-    "document",
-    "stopwords",
-    "filtered"
+  "inputHash": "sha256:a6ce0924596740a7b3af7680c2a55273a75443feef8b57c339591442a2d2bff9",
+  "keywords": [
+    {
+      "count": 1,
+      "word": "generation"
+    },
+    {
+      "count": 1,
+      "word": "input"
+    },
+    {
+      "count": 1,
+      "word": "proof"
+    },
+    {
+      "count": 1,
+      "word": "test"
+    },
+    {
+      "count": 1,
+      "word": "zk"
+    }
   ],
-  "program_hash": "0000000000000000000000000000000000000000000000000000000000000000",
-  "word_count": 4
+  "outputHash": "sha256:c7716da4d36aa2d68bcc542a3936a571c6cd1907fda7dba0c10ca5cef84827b9",
+  "programHash": "936679771774db418fa375bcbc7ff30971ade999f864141b93ddcc716fc81b2e"
 }

@@ -18,6 +18,11 @@ services:
       - IPFS_GATEWAYS=http://ipfs:8080/ipfs,https://ipfs.io/ipfs,https://cloudflare-ipfs.com/ipfs
       - OLLAMA_API_URL=http://ollama:11434
       - RISC0_DEV_MODE=1
+      # Enable real ZK proofs
+      - ZK_HOST_ENABLED=1
+      - MOCK_ZK=false
+    volumes:
+      - ./zk/target/release/zkhost:/app/bin/zkhost:ro
     depends_on:
       - ipfs
       - ollama
