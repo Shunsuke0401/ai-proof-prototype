@@ -1,9 +1,12 @@
 services:
   app:
-    build: .
-    platform: linux/arm64
+    build:
+      context: .
+      args:
+        BUILD_ZK: 0
     ports:
       - "3000:3000"
+    # Pass BUILD_ZK=1 (override) to enable full Rust zk build (slow).
     # Load developer secrets (not committed) from local file.
     # Create a copy of .env.example named .env.local before running.
     env_file:
@@ -21,12 +24,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '6'
+          cpus: "6"
           memory: 12g
 
   ollama:
     image: ollama/ollama:latest
-    platform: linux/arm64
     ports:
       - "11434:11434"
     volumes:
@@ -34,7 +36,6 @@ services:
 
   ipfs:
     image: ipfs/kubo:latest
-    platform: linux/arm64
     ports:
       - "4001:4001" # IPFS swarm port
       - "5001:5001" # IPFS API port
