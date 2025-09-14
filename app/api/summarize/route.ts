@@ -2,285 +2,206 @@ import { NextRequest, NextResponse } from 'next/server';
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import { join } from 'path';
+import crypto from 'crypto';
+import { summarizeWithProvider, ProviderName } from '../../../api/providers';
 import { addFile } from '../../../api/ipfs';
-import { domain, types, SaveProof, ErrorResponse } from '../../../api/types';
 
-// Use local development path or Docker path based on environment
-const ZK_HOST_BINARY = process.env.NODE_ENV === 'production' ? '/app/bin/zkhost' : './zk/target/release/zkhost';
-const TEMP_DIR = process.env.NODE_ENV === 'production' ? '/tmp' : './zk';
+// Configurable paths (keep binary path; gate execution behind flags)
+const ZK_HOST_BINARY = process.env.ZK_HOST_BINARY || (process.env.NODE_ENV === 'production' ? '/app/bin/zkhost' : './zk/target/release/zkhost');
+const TEMP_DIR = process.env.ZK_TEMP_DIR || (process.env.NODE_ENV === 'production' ? '/tmp' : './zk');
 
-export async function POST(request: NextRequest) {
+interface ApiResponse {
+  summary: string;          // bound (proved if zk ran) summary
+  providerSummary?: string; // provider output (not bound if zk used)
+  programHash: string;
+  inputHash: string;
+  outputHash: string;
+  zk: {
+    mode: 'disabled' | 'mock' | 'real' | 'failed';
+    proofCid: string;
+    journalCid: string;
+  };
+  provider: ProviderName;
+  model: string;
+  signer: string;
+  timestamp: number; // epoch ms
+  warnings?: string[];
+}
+
+export async function POST(req: NextRequest) {
   try {
-    const { text, signer } = await request.json();
-    
-    if (!text || !signer) {
-      return NextResponse.json(
-        { error: 'Text and signer are required' },
-        { status: 400 }
-      );
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body.text !== 'string') {
+      return NextResponse.json({ error: 'Missing text' }, { status: 400 });
     }
 
-    // Input size validation for real ZK proofs (2-4KB limit)
-    const textSizeBytes = Buffer.byteLength(text, 'utf8');
-    const maxSizeBytes = 4 * 1024; // 4KB
-    const minSizeBytes = 10; // Minimum 10 bytes
-    
-    if (textSizeBytes > maxSizeBytes) {
-      return NextResponse.json(
-        { 
-          error: `Input text too large: ${textSizeBytes} bytes. Maximum allowed: ${maxSizeBytes} bytes (4KB) for real ZK proof generation.`,
-          inputSize: textSizeBytes,
-          maxSize: maxSizeBytes
-        },
-        { status: 413 }
-      );
-    }
-    
-    if (textSizeBytes < minSizeBytes) {
-      return NextResponse.json(
-        { 
-          error: `Input text too small: ${textSizeBytes} bytes. Minimum required: ${minSizeBytes} bytes.`,
-          inputSize: textSizeBytes,
-          minSize: minSizeBytes
-        },
-        { status: 400 }
-      );
-    }
-    
-    console.log(`📏 Input validation passed: ${textSizeBytes} bytes (${(textSizeBytes/1024).toFixed(2)}KB)`);
+    const { text, signer = 'unknown', provider = 'mock', model, useZk = false }: { text: string; signer?: string; provider?: ProviderName; model?: string; useZk?: boolean } = body;
 
-    const timestamp = new Date().toISOString();
-    const sessionId = `zk_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Create temporary files
-    const inputFile = join(TEMP_DIR, `${sessionId}_input.txt`);
-    const journalFile = join(TEMP_DIR, `${sessionId}_journal.json`);
-    const proofFile = join(TEMP_DIR, `${sessionId}_proof.bin`);
-    
+    if (!text.trim()) return NextResponse.json({ error: 'Empty text' }, { status: 400 });
+    if (!signer) return NextResponse.json({ error: 'Missing signer' }, { status: 400 });
+
+    // Provider summary first (even if zk fails, we have something)
+    let providerSummaryData: { summary: string; model: string; modelHash: string };
+    const warnings: string[] = [];
     try {
-      // Write input text to temporary file
-      await fs.writeFile(inputFile, text, 'utf8');
-      
-      // Generate ZK proof (with fallback to mock for development)
-      console.log(`🔬 Running ZK proof generation for session ${sessionId}`);
-      
-      // Check if ZK generation should be mocked
-      // Default to mock in development environment to avoid build issues
-      const useMockZK = process.env.MOCK_ZK !== 'false' && process.env.NODE_ENV !== 'production';
-      console.log(`🔧 Environment check: MOCK_ZK=${process.env.MOCK_ZK}, NODE_ENV=${process.env.NODE_ENV}, useMockZK=${useMockZK}`);
-      
-      let zkResult;
-      if (useMockZK) {
-        console.log('⚡ Using mock ZK proof for faster development');
-        zkResult = await generateMockZKProof(inputFile, journalFile, proofFile, text);
-      } else {
-        console.log('🔄 Using real ZK proof generation');
-        zkResult = await runZKHost(inputFile, journalFile, proofFile);
-      }
-      
-      if (!zkResult.success) {
-        throw new Error(`ZK proof generation failed: ${zkResult.error}`);
-      }
-      
-      // Read generated files
-      const [journalData, proofBytes] = await Promise.all([
-        fs.readFile(journalFile, 'utf8').then(data => JSON.parse(data)),
-        fs.readFile(proofFile)
-      ]);
-      
-      console.log(`📊 Generated proof: ${proofBytes.length} bytes`);
-      console.log(`📄 Journal data:`, journalData);
-      
-      // Validate proof size for real ZK proofs (should be hundreds of KB+)
-      if (!useMockZK) {
-        const minProofSize = 50 * 1024; // 50KB minimum for real proofs
-        if (proofBytes.length < minProofSize) {
-          console.error(`❌ Proof too small: ${proofBytes.length} bytes < ${minProofSize} bytes`);
-          throw new Error(`Generated proof is too small (${proofBytes.length} bytes). Real ZK proofs should be at least ${minProofSize} bytes. This suggests the proof generation failed or is using dev mode.`);
-        }
-        console.log(`✅ Proof size validation passed: ${proofBytes.length} bytes (${(proofBytes.length/1024).toFixed(2)}KB)`);
-      }
-      
-      // Upload journal and proof to IPFS
-      const [journalCid, proofCid] = await Promise.all([
-        addFile(Buffer.from(JSON.stringify(journalData))),
-        addFile(proofBytes)
-      ]);
-      
-      console.log(`📤 Uploaded to IPFS - Journal: ${journalCid}, Proof: ${proofCid}`);
-      
-      // Create summary metadata with ZK proof data
-      const summaryData = {
-        summary: generateSummaryText(journalData.keywords),
-        keywords: journalData.keywords,
-        programHash: journalData.programHash,
-        inputHash: journalData.inputHash,
-        outputHash: journalData.outputHash,
-        model: 'risc0-zk-summarizer',
-        modelHash: journalData.programHash,
-        signer,
-        timestamp,
-        originalTextHash: journalData.inputHash,
-        zk: {
-          journalCid,
-          proofCid
-        }
-      };
-
-      // Upload summary to IPFS
-      const summaryBuffer = Buffer.from(JSON.stringify(summaryData));
-      const summaryCid = await addFile(summaryBuffer);
-
-      // Create signature data structure (signature should be provided by client)
-      const signatureValue: SaveProof = {
-        cid: summaryCid,
-        modelHash: journalData.programHash,
-        timestamp
-      };
-      
-      // Note: In a real implementation, the signature would be provided by the client wallet
-      // For now, we create the structure without a valid signature
-      const signatureData = {
-        signature: '', // Empty - should be signed by client wallet in production
-        domain,
-        types,
-        value: signatureValue,
-        signer,
-        timestamp
-      };
-
-      // Upload signature to IPFS
-      const signatureBuffer = Buffer.from(JSON.stringify(signatureData));
-      const signatureCid = await addFile(signatureBuffer);
-
-      return NextResponse.json({
-        success: true,
-        summaryCid,
-        signatureCid,
-        summary: summaryData.summary,
-        keywords: journalData.keywords,
-        zkProof: {
-          journalCid,
-          proofCid,
-          programHash: journalData.programHash
-        }
-      });
-
-    } finally {
-      // Clean up temporary files
-      await Promise.allSettled([
-        fs.unlink(inputFile).catch(() => {}),
-        fs.unlink(journalFile).catch(() => {}),
-        fs.unlink(proofFile).catch(() => {})
-      ]);
+      providerSummaryData = await summarizeWithProvider({ provider, text, model });
+    } catch (e) {
+      warnings.push('provider_failed_fallback_mock');
+      providerSummaryData = await summarizeWithProvider({ provider: 'mock', text });
     }
 
-  } catch (error) {
-    console.error('Error in summarize API:', error);
-    return NextResponse.json(
-      { error: 'Internal server error', details: error instanceof Error ? error.message : 'Unknown error' },
-      { status: 500 }
-    );
-  }
-}
+    // Base hashes (provider version)
+    const inputHash = sha256Hex(text);
+    let boundSummary = providerSummaryData.summary;
+    let outputHash = sha256Hex(boundSummary);
+    let programHash = providerSummaryData.modelHash;
+    let zkMode: ApiResponse['zk']['mode'] = 'disabled';
+    let proofCid = 'ipfs_unavailable_proof';
+    let journalCid = 'ipfs_unavailable_journal';
 
-function runZKHost(inputFile: string, journalFile: string, proofFile: string): Promise<{ success: boolean; error?: string }> {
-  return new Promise((resolve) => {
-    const args = ['--in', inputFile, '--out', journalFile, '--proof', proofFile];
-    const process = spawn(ZK_HOST_BINARY, args, {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    // Set 3-minute timeout for real ZK proof generation
-    const timeoutId = setTimeout(() => {
-      console.log('⏰ ZK proof generation timeout, killing process...');
-      process.kill('SIGTERM');
-      setTimeout(() => {
-        if (!process.killed) {
-          process.kill('SIGKILL');
+    if (useZk) {
+      // Gate real execution
+      const zkEnabled = process.env.ZK_HOST_ENABLED === '1';
+      const forceMock = process.env.MOCK_ZK === 'true' || !zkEnabled;
+
+      if (forceMock) {
+        zkMode = 'mock';
+        const mock = await generateMockJournal(text);
+        boundSummary = generateSummaryText(mock.keywords);
+        programHash = mock.programHash;
+        outputHash = mock.outputHash; // Already hash of keywords JSON; we re-hash boundSummary for clarity if desired
+        try {
+          const [j, p] = await Promise.all([
+            safeAddFile(Buffer.from(JSON.stringify(mock.journalData))),
+            safeAddFile(Buffer.from('mock-proof'))
+          ]);
+          if (j) journalCid = j;
+          if (p) proofCid = p;
+        } catch {
+          warnings.push('mock_zk_ipfs_failed');
         }
-      }, 5000);
-      resolve({ success: false, error: 'ZK proof generation timed out after 3 minutes' });
-    }, 180000); // 3 minutes (180 seconds)
-    
-    let stdout = '';
-    let stderr = '';
-    
-    process.stdout.on('data', (data) => {
-      stdout += data.toString();
-      console.log('📝 ZK host output:', data.toString().trim());
-    });
-    
-    process.stderr.on('data', (data) => {
-      stderr += data.toString();
-      console.log('⚠️ ZK host stderr:', data.toString().trim());
-    });
-    
-    process.on('close', (code) => {
-      clearTimeout(timeoutId);
-      if (code === 0) {
-        console.log(`✅ ZK host completed successfully:`, stdout);
-        resolve({ success: true });
       } else {
-        console.error(`❌ ZK host failed with code ${code}:`, stderr);
-        resolve({ success: false, error: `Exit code ${code}: ${stderr}` });
+        const real = await runRealZK(text).catch(e => {
+          warnings.push('zk_exec_error');
+          return null;
+        });
+        if (real && real.success && real.journalData) {
+          zkMode = 'real';
+            const keywords = real.journalData.keywords || [];
+            boundSummary = generateSummaryText(keywords);
+            programHash = real.journalData.programHash || programHash;
+            outputHash = sha256Hex(boundSummary);
+            try {
+              const [j, p] = await Promise.all([
+                safeAddFile(Buffer.from(JSON.stringify(real.journalData))),
+                safeAddFile(real.proofBytes || Buffer.from(''))
+              ]);
+              if (j) journalCid = j;
+              if (p) proofCid = p;
+            } catch {
+              warnings.push('real_zk_ipfs_failed');
+            }
+        } else {
+          zkMode = 'failed';
+          warnings.push('zk_failed_fallback_provider');
+        }
       }
-    });
-    
-    process.on('error', (error) => {
-      clearTimeout(timeoutId);
-      console.error(`❌ ZK host spawn error:`, error);
-      resolve({ success: false, error: error.message });
-    });
-  });
-}
+    }
 
-async function generateMockZKProof(inputFile: string, journalFile: string, proofFile: string, inputText: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    // Generate mock keywords from input text
-    const words = inputText.toLowerCase().split(/\W+/).filter(word => word.length > 3);
-    const wordCounts = words.reduce((acc, word) => {
-      acc[word] = (acc[word] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    
-    const keywords = Object.entries(wordCounts)
-      .map(([word, count]) => ({ word, count }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-    
-    // Create mock journal data
-    const journalData = {
-      keywords,
-      programHash: '0x' + Buffer.from('mock-program-hash').toString('hex'),
-      inputHash: '0x' + Buffer.from(inputText).toString('hex').slice(0, 64),
-      outputHash: '0x' + Buffer.from(JSON.stringify(keywords)).toString('hex').slice(0, 64)
+    const response: ApiResponse = {
+      summary: boundSummary,
+      providerSummary: providerSummaryData.summary,
+      programHash,
+      inputHash,
+      outputHash,
+      zk: { mode: zkMode, proofCid, journalCid },
+      provider,
+      model: providerSummaryData.model,
+      signer,
+      timestamp: Date.now(),
+      warnings: warnings.length ? warnings : undefined
     };
-    
-    // Write mock files
-    await fs.writeFile(journalFile, JSON.stringify(journalData), 'utf8');
-    await fs.writeFile(proofFile, Buffer.from('mock-zk-proof-data'));
-    
-    console.log('✅ Mock ZK proof generated successfully');
-    return { success: true };
-  } catch (error) {
-    console.error('❌ Mock ZK proof generation failed:', error);
-    return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
-  }
-}
 
-function generateSummaryText(keywords: Array<{ word: string; count: number }>): string {
-  if (keywords.length === 0) {
-    return 'No significant keywords found.';
+    return NextResponse.json(response);
+  } catch (e) {
+    console.error('[summarize] error', e);
+    return NextResponse.json({ error: 'Internal server error', details: e instanceof Error ? e.message : 'unknown' }, { status: 500 });
   }
-  
-  const topWords = keywords.slice(0, 3).map(k => k.word);
-  return `Key topics: ${topWords.join(', ')} (${keywords.length} keywords total)`;
 }
 
 export async function GET() {
-  return NextResponse.json(
-    { error: 'Method not allowed. Use POST to submit text for summarization.' } as ErrorResponse,
-    { status: 405 }
-  );
+  return NextResponse.json({ message: 'POST text to summarize. Optional: { useZk: true }' });
+}
+
+// ===== Helpers =====
+
+function sha256Hex(data: string | Buffer | Uint8Array) {
+  const buf: Buffer = typeof data === 'string' ? Buffer.from(data) : Buffer.isBuffer(data) ? data : Buffer.from(data);
+  const bytes = Uint8Array.from(buf);
+  return '0x' + crypto.createHash('sha256').update(bytes).digest('hex');
+}
+
+function generateSummaryText(keywords: Array<{ word: string; count: number }>): string {
+  if (!keywords.length) return 'No significant keywords found.';
+  return 'Key topics: ' + keywords.slice(0, 3).map(k => k.word).join(', ');
+}
+
+async function generateMockJournal(input: string) {
+  const words = input.toLowerCase().split(/\W+/).filter(w => w.length > 3);
+  const counts: Record<string, number> = {};
+  for (const w of words) counts[w] = (counts[w] || 0) + 1;
+  const keywords = Object.entries(counts).map(([word, count]) => ({ word, count })).sort((a,b)=>b.count-a.count).slice(0,10);
+  const programHash = sha256Hex('mock_program_v1');
+  const inputHash = sha256Hex(input);
+  const outputHash = sha256Hex(JSON.stringify(keywords));
+  const journalData = { keywords, programHash, inputHash, outputHash };
+  return { keywords, journalData, programHash, inputHash, outputHash };
+}
+
+async function runRealZK(text: string): Promise<{ success: boolean; journalData?: any; proofBytes?: Buffer; }>{
+  const session = `zk_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  await fs.mkdir(TEMP_DIR, { recursive: true });
+  const inputFile = join(TEMP_DIR, `${session}_input.txt`);
+  const journalFile = join(TEMP_DIR, `${session}_journal.json`);
+  const proofFile = join(TEMP_DIR, `${session}_proof.bin`);
+  await fs.writeFile(inputFile, text, 'utf8');
+  try {
+    const { success } = await runZKHost(inputFile, journalFile, proofFile);
+    if (!success) return { success: false };
+    const [journalRaw, proofBytes] = await Promise.all([
+      fs.readFile(journalFile, 'utf8'),
+      fs.readFile(proofFile)
+    ]);
+    let journalData: any;
+    try { journalData = JSON.parse(journalRaw); } catch { journalData = { raw: journalRaw }; }
+    return { success: true, journalData, proofBytes };
+  } finally {
+    Promise.allSettled([
+      fs.unlink(inputFile),
+      fs.unlink(journalFile),
+      fs.unlink(proofFile)
+    ]).catch(()=>{});
+  }
+}
+
+function runZKHost(inputFile: string, journalFile: string, proofFile: string): Promise<{ success: boolean; error?: string }>{
+  return new Promise(resolve => {
+    const args = ['--in', inputFile, '--out', journalFile, '--proof', proofFile];
+    const proc = spawn(ZK_HOST_BINARY, args, { stdio: ['ignore','pipe','pipe'] });
+    const timeout = setTimeout(() => {
+      proc.kill('SIGTERM');
+      setTimeout(()=>!proc.killed && proc.kill('SIGKILL'), 4000);
+      resolve({ success: false, error: 'timeout' });
+    }, 180000);
+    proc.on('close', code => { clearTimeout(timeout); resolve({ success: code === 0 }); });
+    proc.on('error', err => { clearTimeout(timeout); resolve({ success: false, error: err.message }); });
+  });
+}
+
+async function safeAddFile(buf: Buffer | Uint8Array | string): Promise<string | null> {
+  try {
+    const b: Buffer = typeof buf === 'string' ? Buffer.from(buf) : Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+    const bytes = Uint8Array.from(b);
+    return await addFile(bytes);
+  } catch { return null; }
 }

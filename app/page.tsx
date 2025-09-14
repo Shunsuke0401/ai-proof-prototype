@@ -1,359 +1,352 @@
-'use client';
+"use client";
 
-/**
- * Main page component for AI Proof Prototype
- */
+import { useState, useEffect } from "react";
+import { useAccount, useSignTypedData, useChainId } from "wagmi";
+import { ConnectButton } from "@rainbow-me/rainbowkit";
+import VerificationPanel from "./components/VerificationPanel";
 
-import { useState } from 'react';
-import { useAccount, useSignTypedData } from 'wagmi';
-import dynamic from 'next/dynamic';
-import WalletBox from './components/WalletBox';
-import { domain, types, SaveProof, ProcessStatus, UploadResult } from '../api/types';
-import { deriveKeyFromSignatureHex, encryptAesGcm, stringToUint8Array } from '../api/crypto';
+interface ZKSummaryResponse {
+  summary: string;
+  programHash: string;
+  inputHash: string;
+  outputHash: string;
+  zk: {
+    proofCid: string;
+    journalCid: string;
+  };
+  signer: string;
+  timestamp: number;
+}
 
-// Helper function to upload files via our API endpoint
-const uploadToIpfs = async (data: Uint8Array | string): Promise<string> => {
-  const formData = new FormData();
-  
-  let blob: Blob;
-  if (typeof data === 'string') {
-    blob = new Blob([data], { type: 'application/json' });
-  } else {
-    blob = new Blob([data], { type: 'application/octet-stream' });
-  }
-  
-  formData.append('file', blob);
-  
-  const response = await fetch('/api/ipfs-upload', {
-    method: 'POST',
-    body: formData,
-  });
-  
-  if (!response.ok) {
-    throw new Error(`IPFS upload failed: ${response.statusText}`);
-  }
-  
-  const result = await response.json();
-  return result.cid;
-};
-
-export default function Home() {
-  const [text, setText] = useState('');
-  const [summary, setSummary] = useState('');
-  const [modelHash, setModelHash] = useState('');
-  const [status, setStatus] = useState<ProcessStatus>('idle');
-  const [result, setResult] = useState<UploadResult | null>(null);
+export default function AIStudio() {
+  const [activeTab, setActiveTab] = useState<"generate" | "verify">("generate");
+  const [inputText, setInputText] = useState(
+    "Write a concise summary about zero-knowledge proofs applications in content authenticity."
+  );
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [zkResult, setZkResult] = useState<ZKSummaryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [savedSummaryCid, setSavedSummaryCid] = useState<string | null>(null);
+  const [savedSignatureCid, setSavedSignatureCid] = useState<string | null>(
+    null
+  );
+  // Provider & model selection
+  const [provider, setProvider] = useState<
+    "mock" | "ollama" | "openai" | "anthropic" | "together"
+  >("mock");
+  const [model, setModel] = useState<string>("");
+
   const { address, isConnected } = useAccount();
+  const chainId = useChainId();
   const { signTypedDataAsync } = useSignTypedData();
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
-  const handleSummarize = async () => {
-    if (!text.trim()) {
-      setError('Please enter some text to summarize');
-      return;
-    }
-
-    if (!isConnected || !address) {
-      setError('Please connect your wallet first');
-      return;
-    }
-
+  async function handleGenerate() {
+    if (!inputText.trim()) return;
+    setIsGenerating(true);
+    setError(null);
+    setZkResult(null);
     try {
-      setError(null);
-      setStatus('summarizing');
-
-      // Generate ZK summary
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes timeout for ZK proof
-      
-      const summaryResponse = await fetch('/api/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, signer: address }),
-        signal: controller.signal
+      const res = await fetch("/api/summarize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: inputText,
+          signer: address || "demo_user",
+          provider,
+          model: model || undefined,
+        }),
       });
-      
-      clearTimeout(timeoutId);
+      if (!res.ok) throw new Error(`Generation failed (${res.status})`);
+      const data: ZKSummaryResponse = await res.json();
+      setZkResult(data);
+    } catch (e) {
+      console.error("Generation error", e);
+      setError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setIsGenerating(false);
+    }
+  }
 
-      if (!summaryResponse.ok) {
-        throw new Error('Failed to generate ZK summary');
+  async function uploadToIpfs(content: string, filename: string) {
+    const form = new FormData();
+    form.append(
+      "file",
+      new File([content], filename, { type: "application/json" })
+    );
+    const res = await fetch("/api/ipfs-upload", { method: "POST", body: form });
+    if (!res.ok) throw new Error("IPFS upload failed");
+    const json = await res.json();
+    return json.cid as string;
+  }
+
+  const domain = {
+    name: "AIProof",
+    version: "1",
+    chainId: chainId || 1,
+    verifyingContract: "0x0000000000000000000000000000000000000000",
+  } as const;
+  const types = {
+    SaveProof: [
+      { name: "cid", type: "string" },
+      { name: "modelHash", type: "string" },
+      { name: "timestamp", type: "string" },
+    ],
+  } as const;
+
+  async function handleSave() {
+    if (!zkResult) return;
+    setSaveState("saving");
+    try {
+      // 1. Store summary JSON
+      const summaryObject = {
+        summary: zkResult.summary,
+        programHash: zkResult.programHash,
+        inputHash: zkResult.inputHash,
+        outputHash: zkResult.outputHash,
+        proofCid: zkResult.zk.proofCid,
+        journalCid: zkResult.zk.journalCid,
+        signer: address || "demo_user",
+        timestamp: zkResult.timestamp,
+      };
+      const summaryCid = await uploadToIpfs(
+        JSON.stringify(summaryObject, null, 2),
+        "summary.json"
+      );
+
+      // 2. Build typed data + sign (optional)
+      const message = {
+        cid: summaryCid,
+        modelHash: zkResult.programHash,
+        timestamp: new Date(zkResult.timestamp).toISOString(),
+      } as const;
+      let signature: string | null = null;
+      if (isConnected && signTypedDataAsync) {
+        try {
+          signature = await signTypedDataAsync({
+            domain,
+            types,
+            primaryType: "SaveProof",
+            message,
+          });
+        } catch (sigErr) {
+          console.warn("Signature skipped", sigErr);
+        }
       }
 
-      const summaryData = await summaryResponse.json();
-      
-      // Debug: Log the response data
-      console.log('Summary response data:', summaryData);
-      console.log('zkProof object:', summaryData.zkProof);
-      console.log('programHash value:', summaryData.zkProof?.programHash);
-      
-      // Set the summary and program hash for display
-      setSummary(summaryData.summary);
-      const programHash = summaryData.zkProof?.programHash || '';
-      console.log('Setting modelHash to:', programHash);
-      setModelHash(programHash);
-      setStatus('idle');
-
-    } catch (err) {
-      console.error('Error in ZK summarize:', err);
-      setError(err instanceof Error ? err.message : 'An unknown error occurred');
-      setStatus('error');
-    }
-  };
-
-  const handleSave = async () => {
-    if (!isConnected || !address) {
-      setError('Please connect your wallet first');
-      return;
-    }
-
-    if (!summary.trim()) {
-      setError('Please generate a summary first');
-      return;
-    }
-
-    // Debug: Check modelHash value before signing
-    console.log('Current modelHash value:', modelHash);
-    console.log('ModelHash length:', modelHash.length);
-    console.log('ModelHash type:', typeof modelHash);
-    
-    if (!modelHash || modelHash.trim() === '' || modelHash === '<FILLED_BY_HOST>') {
-      setError('Model hash is missing or invalid. Please generate a summary first.');
-      return;
-    }
-
-    try {
-      setError(null);
-      setStatus('encrypting');
-
-      // Create temporary signature for key derivation
-      const timestamp = new Date().toISOString();
-      const tempValue: SaveProof = {
-        cid: 'temp', // Will be updated after encryption
-        modelHash: modelHash,
-        timestamp
-      };
-      
-      // Debug: Log the value being signed
-      console.log('Signing tempValue:', tempValue);
-
-      // Sign the temporary data to get signature for encryption
-      const tempSignature = await signTypedDataAsync({
+      // 3. Store signature wrapper
+      const signatureObj = {
+        signer: address || "demo_user",
         domain,
         types,
-        primaryType: 'SaveProof',
-        message: tempValue
-      });
-
-      // Encrypt the summary
-      const key = await deriveKeyFromSignatureHex(tempSignature);
-      const summaryBytes = stringToUint8Array(summary);
-      const { iv, ciphertext } = await encryptAesGcm(summaryBytes, key);
-
-      // Combine IV and ciphertext for storage
-      const encryptedData = new Uint8Array(iv.length + ciphertext.length);
-      encryptedData.set(iv, 0);
-      encryptedData.set(ciphertext, iv.length);
-
-      setStatus('uploading');
-
-      // Upload encrypted data to IPFS
-      const encryptedCid = await uploadToIpfs(encryptedData);
-
-      // Create final signature with actual CID
-      setStatus('signing');
-      const finalValue: SaveProof = {
-        cid: encryptedCid,
-        modelHash: modelHash,
-        timestamp
+        primaryType: "SaveProof",
+        value: message,
+        signature: signature || "unsigned",
       };
+      const signatureCid = await uploadToIpfs(
+        JSON.stringify(signatureObj, null, 2),
+        "signature.json"
+      );
 
-      const finalSignature = await signTypedDataAsync({
-        domain,
-        types,
-        primaryType: 'SaveProof',
-        message: finalValue
-      });
-
-      // Create metadata and upload to IPFS
-      const summaryMetadata = {
-        summary: summary,
-        model: 'llama3',
-        modelHash: modelHash,
-        params: {},
-        signer: address,
-        timestamp,
-        originalTextHash: await calculateTextHash(text),
-        encryptedCid
-      };
-
-      const signatureData = {
-        signature: finalSignature,
-        domain,
-        types,
-        value: finalValue,
-        signer: address,
-        timestamp
-      };
-
-      // Upload metadata and signature
-      const [summaryCid, signatureCid] = await Promise.all([
-        uploadToIpfs(JSON.stringify(summaryMetadata, null, 2)),
-        uploadToIpfs(JSON.stringify(signatureData, null, 2))
-      ]);
-
-      setStatus('completed');
-      setResult({
-        encryptedCid,
-        summaryCid,
-        signatureCid
-      });
-
-    } catch (err) {
-      console.error('Error in save:', err);
-      setError(err instanceof Error ? err.message : 'An unknown error occurred');
-      setStatus('error');
+      setSavedSummaryCid(summaryCid);
+      setSavedSignatureCid(signatureCid);
+      setSaveState("saved");
+    } catch (e) {
+      console.error("Save error", e);
+      setSaveState("error");
     }
-  };
-
-  const calculateTextHash = async (text: string): Promise<string> => {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(text);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-  };
-
-  const getStatusDisplay = () => {
-    switch (status) {
-      case 'summarizing':
-        return <span className="status-indicator status-loading">🤖 Generating summary...</span>;
-      case 'encrypting':
-        return <span className="status-indicator status-loading">🔐 Encrypting data...</span>;
-      case 'signing':
-        return <span className="status-indicator status-loading">✍️ Signing with wallet...</span>;
-      case 'uploading':
-        return <span className="status-indicator status-loading">📤 Uploading to IPFS...</span>;
-      case 'completed':
-        return <span className="status-indicator status-success">✅ Completed successfully!</span>;
-      case 'error':
-        return <span className="status-indicator status-error">❌ Error occurred</span>;
-      default:
-        return null;
-    }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gray-50 py-8">
-      <div className="max-w-4xl mx-auto px-4">
-        <header className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">AI Proof Prototype</h1>
-          <p className="text-lg text-gray-600">
-            AI summarization with Ethereum wallet signing and IPFS storage
-          </p>
-        </header>
-
-        <WalletBox />
-
-        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
-          <h2 className="text-xl font-semibold mb-4">Text Summarization</h2>
-          
-          <div className="mb-4">
-            <label htmlFor="text-input" className="block text-sm font-medium text-gray-700 mb-2">
-              Enter text to summarize:
-            </label>
-            <textarea
-              id="text-input"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              className="w-full h-40 p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-              placeholder="Enter your text here..."
-              disabled={status !== 'idle' && status !== 'error'}
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100">
+      <header className="border-b bg-white/70 backdrop-blur-sm">
+        <div className="max-w-4xl mx-auto px-6 h-16 flex items-center justify-between">
+          <h1 className="text-lg font-semibold text-slate-800">
+            AI Proof Demo
+          </h1>
+          <div className="flex items-center gap-4">
+            <div className="text-sm text-slate-600" suppressHydrationWarning>
+              {mounted && isConnected
+                ? `${address?.slice(0, 6)}...${address?.slice(-4)}`
+                : "demo.eth"}
+            </div>
+            <ConnectButton
+              accountStatus={{ smallScreen: "avatar", largeScreen: "full" }}
+              showBalance={false}
             />
           </div>
+        </div>
+      </header>
 
-          <div className="mb-4">
+      <main className="max-w-4xl mx-auto px-6 py-8">
+        <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-200">
+          <div className="flex items-center gap-1 mb-6 bg-slate-100 rounded-lg p-1">
             <button
-              onClick={handleSummarize}
-              disabled={!text.trim() || (status !== 'idle' && status !== 'error')}
-              className="bg-green-600 text-white px-6 py-2 rounded-md hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+              onClick={() => setActiveTab("generate")}
+              className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition ${
+                activeTab === "generate"
+                  ? "bg-white shadow-sm text-slate-800"
+                  : "text-slate-600 hover:text-slate-800"
+              }`}
             >
-              Summarize with AI
+              ✨ Generate
+            </button>
+            <button
+              onClick={() => setActiveTab("verify")}
+              className={`flex-1 px-4 py-2 rounded-md text-sm font-medium transition ${
+                activeTab === "verify"
+                  ? "bg-white shadow-sm text-slate-800"
+                  : "text-slate-600 hover:text-slate-800"
+              }`}
+            >
+              🔍 Verify
             </button>
           </div>
 
-          {summary && (
-            <div className="mb-4">
-              <label htmlFor="summary-output" className="block text-sm font-medium text-gray-700 mb-2">
-                AI Generated Summary:
+          {activeTab === "generate" ? (
+            <div>
+              {/* Provider / Model Selection */}
+              <div className="mb-4 flex flex-col md:flex-row gap-4">
+                <div className="flex-1">
+                  <label className="block font-semibold text-slate-700 mb-1 text-sm">
+                    Provider
+                  </label>
+                  <select
+                    value={provider}
+                    onChange={(e) => {
+                      const p = e.target.value as typeof provider;
+                      setProvider(p);
+                      // Reset model placeholder when provider changes
+                      if (p === "mock") setModel("");
+                      if (p === "ollama" && !model) setModel("llama3");
+                      if (p === "openai" && !model) setModel("gpt-4o-mini");
+                      if (p === "anthropic" && !model)
+                        setModel("claude-3-haiku-20240307");
+                      if (p === "together" && !model)
+                        setModel("meta-llama/Meta-Llama-3-8B-Instruct-Turbo");
+                    }}
+                    className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="mock">Mock (deterministic)</option>
+                    <option value="ollama">Ollama (local)</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="together">Together</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="block font-semibold text-slate-700 mb-1 text-sm">
+                    Model (optional)
+                  </label>
+                  <input
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder={
+                      provider === "mock"
+                        ? "N/A"
+                        : provider === "ollama"
+                        ? "llama3"
+                        : provider === "openai"
+                        ? "gpt-4o-mini"
+                        : provider === "anthropic"
+                        ? "claude-3-haiku-20240307"
+                        : "meta-llama/Meta-Llama-3-8B-Instruct-Turbo"
+                    }
+                    disabled={provider === "mock"}
+                    className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                  />
+                </div>
+              </div>
+              <label className="block font-semibold text-slate-700 mb-2">
+                Input Text
               </label>
               <textarea
-                id="summary-output"
-                value={summary}
-                onChange={(e) => setSummary(e.target.value)}
-                className="w-full h-32 p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-                placeholder="Summary will appear here..."
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                className="w-full h-32 p-4 border-2 border-slate-200 rounded-lg resize-none focus:border-blue-500 focus:outline-none transition-colors"
+                placeholder="Enter text to summarize..."
               />
-            </div>
-          )}
+              <div className="mt-4">
+                <button
+                  onClick={handleGenerate}
+                  disabled={isGenerating || !inputText.trim()}
+                  className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {isGenerating ? "⏳ Generating..." : "✨ Generate Summary"}
+                </button>
+              </div>
+              {error && (
+                <div className="mt-3 text-sm text-red-600">{error}</div>
+              )}
+              {zkResult && (
+                <div className="mt-6 space-y-5">
+                  {/* Summary Block */}
+                  <div>
+                    <div className="text-sm font-semibold text-slate-700 mb-1">
+                      Summary
+                    </div>
+                    <pre className="whitespace-pre-wrap text-sm bg-slate-50 p-4 rounded border border-slate-200 font-mono">
+                      {zkResult.summary}
+                    </pre>
+                  </div>
 
-          <div className="flex items-center justify-between">
-            <button
-              onClick={handleSave}
-              disabled={!isConnected || !summary.trim() || (status !== 'idle' && status !== 'error')}
-              className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-            >
-              Save
-            </button>
-            
-            <div className="flex items-center">
-              {getStatusDisplay()}
-            </div>
-          </div>
+                  {/* Metadata / ZK (mock) Panel */}
+                  <div className="grid gap-2 text-xs bg-slate-50 p-4 rounded border border-slate-200 font-mono">
+                    <div className="font-semibold text-slate-700 mb-1 normal-case tracking-normal">
+                      Generation Metadata (mock ZK)
+                    </div>
+                    <div>Program Hash: {zkResult.programHash}</div>
+                    <div>Input Hash: {zkResult.inputHash}</div>
+                    <div>Output Hash: {zkResult.outputHash}</div>
+                    <div>Encrypted CID: {zkResult.zk.proofCid}</div>
+                    <div>Journal CID: {zkResult.zk.journalCid}</div>
+                  </div>
 
-          {error && (
-            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-md">
-              <p className="text-red-700 text-sm">{error}</p>
+                  {/* Save & Sign */}
+                  <div>
+                    <button
+                      onClick={handleSave}
+                      disabled={saveState === "saving"}
+                      className="px-5 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+                    >
+                      {saveState === "saving"
+                        ? "⏳ Saving..."
+                        : saveState === "saved"
+                        ? "✅ Saved"
+                        : "💾 Save & Sign"}
+                    </button>
+                  </div>
+
+                  {/* Stored Artifact CIDs */}
+                  {(savedSummaryCid || savedSignatureCid) && (
+                    <div className="text-xs bg-emerald-50 border border-emerald-200 p-4 rounded space-y-1 font-mono">
+                      <div className="font-semibold text-emerald-700 mb-1">
+                        Stored Artifacts
+                      </div>
+                      {savedSummaryCid && (
+                        <div>Summary CID: {savedSummaryCid}</div>
+                      )}
+                      {savedSignatureCid && (
+                        <div>Signature CID: {savedSignatureCid}</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
+          ) : (
+            <VerificationPanel
+              onVerify={() => {
+                /* handled internally */
+              }}
+            />
           )}
         </div>
-
-        {result && (
-          <div className="bg-white rounded-lg shadow-md p-6">
-            <h2 className="text-xl font-semibold mb-4">Results</h2>
-            
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Encrypted Data CID:</label>
-                <code className="block mt-1 p-2 bg-gray-100 rounded text-sm break-all text-gray-900">
-                  {result.encryptedCid}
-                </code>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Summary Metadata CID:</label>
-                <code className="block mt-1 p-2 bg-gray-100 rounded text-sm break-all text-gray-900">
-                  {result.summaryCid}
-                </code>
-              </div>
-              
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Signature CID:</label>
-                <code className="block mt-1 p-2 bg-gray-100 rounded text-sm break-all text-gray-900">
-                  {result.signatureCid}
-                </code>
-              </div>
-            </div>
-            
-            <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
-              <p className="text-blue-700 text-sm">
-                💡 Your summary has been encrypted, signed, and stored on IPFS. 
-                Use the verification script to validate the signature and model hash.
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
+      </main>
     </div>
   );
 }
