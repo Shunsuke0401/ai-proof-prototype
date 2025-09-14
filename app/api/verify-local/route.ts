@@ -4,7 +4,7 @@ import { verifyTypedData } from 'viem';
 
 export async function POST(request: NextRequest) {
   try {
-    const { signedProvenanceCid } = await request.json();
+    const { signedProvenanceCid, includeContent } = await request.json();
     
     if (!signedProvenanceCid) {
       return NextResponse.json({ error: 'signedProvenanceCid is required' }, { status: 400 });
@@ -63,6 +63,9 @@ export async function POST(request: NextRequest) {
     // Try to retrieve content if contentCid is available
     let contentVerified = false;
     let contentDetails = null;
+    let outputContent = null;
+    let originalPrompt = null;
+    
     if (signedProvenance.provenance.contentCid) {
       try {
         // Try to get content as raw data first
@@ -76,6 +79,12 @@ export async function POST(request: NextRequest) {
           contentType: 'text',
           preview: contentText.substring(0, 100) + (contentText.length > 100 ? '...' : '')
         };
+        
+        // If includeContent is true, return the full content
+        if (includeContent) {
+          outputContent = contentText;
+        }
+        
         console.log('✅ Content successfully retrieved and verified');
       } catch (error) {
         console.warn('⚠️ Content retrieval failed:', error);
@@ -85,8 +94,27 @@ export async function POST(request: NextRequest) {
         };
       }
     }
+    
+    // Try to retrieve original prompt if promptCid is available
+    if (includeContent && signedProvenance.promptCid) {
+      try {
+        const promptData = await getFile(signedProvenance.promptCid);
+        originalPrompt = new TextDecoder().decode(promptData);
+        console.log('✅ Original prompt successfully retrieved');
+      } catch (error) {
+        console.warn('⚠️ Prompt retrieval failed:', error);
+      }
+    }
 
     return NextResponse.json({
+      ok: true,
+      issues: signatureValid ? [] : ['signature_invalid'],
+      warnings: [],
+      provenance: signedProvenance.provenance,
+      signer: signedProvenance.signer,
+      signature: signedProvenance.signature,
+      outputContent,
+      originalPrompt,
       success: true,
       signatureValid,
       contentVerified,

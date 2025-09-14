@@ -29,6 +29,8 @@ export default function AIStudio() {
   const [unsigned, setUnsigned] = useState<UnsignedProvenanceResponse | null>(
     null
   );
+  const [editableContent, setEditableContent] = useState<string>("");
+  const [currentOutputHash, setCurrentOutputHash] = useState<string>("");
   const [publishedCid, setPublishedCid] = useState<string | null>(null);
   const [journalCid, setJournalCid] = useState<string | null>(null);
   const [proofCid, setProofCid] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export default function AIStudio() {
       if (!res.ok) throw new Error(`Generation failed (${res.status})`);
       const data: UnsignedProvenanceResponse = await res.json();
       setUnsigned(data);
+      setEditableContent(data.providerOutput || "");
       if (data.zk) {
         setJournalCid(data.zk.journalCid || null);
         setProofCid(data.zk.proofCid || null);
@@ -117,6 +120,55 @@ export default function AIStudio() {
     ],
   } as const;
 
+  // Helper function to calculate output hash
+  async function calculateOutputHash(content: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(content);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return '0x' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  // Update output hash when content changes
+  useEffect(() => {
+    if (editableContent) {
+      calculateOutputHash(editableContent).then(setCurrentOutputHash);
+    }
+  }, [editableContent]);
+
+  // Helper function to recalculate hashes when content is edited
+  async function recalculateProvenance(editedContent: string) {
+    if (!unsigned) return null;
+    
+    // Calculate new output hash
+    const encoder = new TextEncoder();
+    const data = encoder.encode(editedContent);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    const newOutputHash = '0x' + hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    
+    // Upload edited content to get new CID
+    const form = new FormData();
+    form.append('file', new File([editedContent], 'content.txt', { type: 'text/plain' }));
+    const res = await fetch('/api/ipfs-upload', { method: 'POST', body: form });
+    if (!res.ok) throw new Error('IPFS upload failed');
+    const json = await res.json();
+    const newContentCid = json.cid;
+    
+    // Create updated provenance object
+    const updatedProvenance = {
+      ...unsigned.provenance,
+      outputHash: newOutputHash,
+      contentCid: newContentCid
+    };
+    
+    return {
+      ...unsigned,
+      provenance: updatedProvenance,
+      providerOutput: editedContent
+    };
+  }
+
   async function handleSignAndPublish() {
     console.log("[DEBUG] handleSignAndPublish called", { unsigned, isConnected, address });
     if (!unsigned) {
@@ -125,29 +177,39 @@ export default function AIStudio() {
     }
     setSaveState("saving");
     try {
+      // Check if content was edited and recalculate provenance if needed
+       let provenanceToSign = unsigned;
+       if (editableContent !== unsigned.providerOutput) {
+         console.log("[DEBUG] Content was edited, recalculating provenance...");
+         const recalculated = await recalculateProvenance(editableContent);
+         if (!recalculated) {
+           throw new Error('Failed to recalculate provenance for edited content');
+         }
+         provenanceToSign = recalculated;
+       }
       let sig: string | null = null;
-      if (isConnected && signTypedDataAsync) {
-        console.log("[DEBUG] Signing with MetaMask...");
-        sig = await signTypedDataAsync({
-          domain: unsigned.domain,
-          types: unsigned.types,
-          primaryType: unsigned.primaryType,
-          message: unsigned.provenance,
+        if (isConnected && signTypedDataAsync) {
+          console.log("[DEBUG] Signing with MetaMask...");
+          sig = await signTypedDataAsync({
+            domain: provenanceToSign.domain,
+            types: provenanceToSign.types,
+            primaryType: provenanceToSign.primaryType,
+            message: provenanceToSign.provenance,
+          });
+          console.log("[DEBUG] Signature received:", sig?.slice(0, 20) + "...");
+          setSignature(sig);
+        }
+        console.log("[DEBUG] Making publish request...");
+        const publishRes = await fetch("/api/publish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provenance: provenanceToSign.provenance,
+            signature: sig || "unsigned",
+            signer: address || "demo_user",
+            promptCid: provenanceToSign.promptCid,
+          }),
         });
-        console.log("[DEBUG] Signature received:", sig?.slice(0, 20) + "...");
-        setSignature(sig);
-      }
-      console.log("[DEBUG] Making publish request...");
-      const publishRes = await fetch("/api/publish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provenance: unsigned.provenance,
-          signature: sig || "unsigned",
-          signer: address || "demo_user",
-          promptCid: unsigned.promptCid,
-        }),
-      });
       console.log("[DEBUG] Publish response status:", publishRes.status);
       if (!publishRes.ok)
         throw new Error(`Publish failed (${publishRes.status})`);
@@ -305,23 +367,35 @@ export default function AIStudio() {
                   {/* Generated Content */}
                   <div>
                     <div className="text-sm font-semibold text-slate-700 mb-1">
-                      Generated Content
+                      Generated Content (Editable)
                     </div>
-                    <pre className="whitespace-pre-wrap text-sm bg-slate-50 p-4 rounded border border-slate-200 font-mono">
-                      {unsigned.providerOutput}
-                    </pre>
+                    <textarea
+                      value={editableContent}
+                      onChange={(e) => setEditableContent(e.target.value)}
+                      className="w-full h-32 text-sm bg-slate-50 p-4 rounded border border-slate-200 font-mono resize-y"
+                      placeholder="Generated content will appear here..."
+                    />
                   </div>
 
                   {/* Provenance Preview */}
                   <div className="grid gap-1 text-xs bg-slate-50 p-4 rounded border border-slate-200 font-mono">
-                    <div className="font-semibold text-slate-700 mb-1">
+                    <div className="font-semibold text-slate-700 mb-1 flex items-center gap-2">
                       Provenance (unsigned)
+                      {editableContent !== unsigned.providerOutput && (
+                        <span className="text-orange-600 text-xs font-normal">
+                          ⚠️ Content Modified
+                        </span>
+                      )}
                     </div>
                     <div>Model ID: {unsigned.provenance.modelId}</div>
                     <div>Prompt Hash: {unsigned.provenance.promptHash}</div>
-                    <div>Output Hash: {unsigned.provenance.outputHash}</div>
+                    <div className={editableContent !== unsigned.providerOutput ? "text-orange-600" : ""}>
+                      Output Hash: {editableContent !== unsigned.providerOutput && currentOutputHash ? currentOutputHash : unsigned.provenance.outputHash}
+                    </div>
                     <div>Params Hash: {unsigned.provenance.paramsHash}</div>
-                    <div>Content CID: {unsigned.provenance.contentCid}</div>
+                    <div className={editableContent !== unsigned.providerOutput ? "text-orange-600" : ""}>
+                      Content CID: {editableContent !== unsigned.providerOutput ? "(will be recalculated)" : unsigned.provenance.contentCid}
+                    </div>
                     <div>
                       Attestation: {unsigned.provenance.attestationStrategy}
                     </div>
