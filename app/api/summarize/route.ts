@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { summarizeWithProvider, ProviderName } from '../../../api/providers';
 import { addFile } from '../../../api/ipfs';
 import { domain, types, ZERO_HASH, ContentProvenanceValue, UnsignedProvenanceResponse } from '../../../api/types';
+import { callHostedProver, parseReceiptJournal, verifyReceipt, validateJournalBindings, sha256Hex as proverSha256 } from '../../../api/prover';
 
 // Configurable paths (keep binary path; gate execution behind flags)
 const ZK_HOST_BINARY = process.env.ZK_HOST_BINARY || (process.env.NODE_ENV === 'production' ? '/app/bin/zkhost' : './zk/target/release/zkhost');
@@ -52,8 +53,9 @@ export async function POST(req: NextRequest) {
   let zkMode: 'disabled' | 'real' | 'mock' | 'failed' = 'disabled';
 
   if (useZk) {
-      const zkEnabled = process.env.ZK_HOST_ENABLED === '1';
-      const forceMock = process.env.MOCK_ZK === 'true' || !zkEnabled;
+      // TODO: Switch back to local rzup if needed
+      // Migrated from local proving to hosted proving for better scalability
+      const forceMock = process.env.MOCK_ZK === 'true';
       if (forceMock) {
         zkMode = 'mock';
         const mock = await generateMockJournal(providerOutput);
@@ -70,27 +72,105 @@ export async function POST(req: NextRequest) {
           warnings.push('mock_zk_ipfs_failed');
         }
       } else {
-        const real = await runRealZK(providerOutput).catch(e => { warnings.push('zk_exec_error'); return null; });
-        if (real && real.success && real.journalData) {
-          zkMode = 'real';
-          const journal = real.journalData;
-          const kws = journal.keywords || [];
-          // Keywords in journal should already be canonical; compute hash same strategy as guest
-          keywordsHash = sha256Hex(JSON.stringify(kws));
-          programHash = journal.programHash && journal.programHash !== '<FILLED_BY_HOST>' ? toBytes32(programHashFromAny(journal.programHash)) : ZERO_HASH;
-          try {
-            const [j, p] = await Promise.all([
-              safeAddFile(Buffer.from(JSON.stringify(journal))),
-              safeAddFile(real.proofBytes || Buffer.from(''))
-            ]);
-            if (j) journalCid = j;
-            if (p) proofCid = p;
-          } catch {
-            warnings.push('real_zk_ipfs_failed');
+        // Use hosted prover instead of local rzup execution
+        try {
+          console.log('[summarize] prover_request_start', { 
+            req_id: `req_${Date.now()}_${Math.random().toString(36).slice(2,8)}`,
+            image_id: 'default_image_id', // TODO: Get actual image_id from config
+            input_length: providerOutput.length 
+          });
+          
+          // Prepare request for hosted prover
+          const proverRequest = {
+            image_id: 'default_image_id', // TODO: Get actual image_id from config
+            input: providerOutput,
+            seed: Math.floor(Math.random() * 1000000),
+            model_fingerprint: providerSummaryData.modelHash || sha256Hex(providerSummaryData.model)
+          };
+          
+          // Call hosted prover
+          const proverResult = await callHostedProver(
+            proverRequest.image_id,
+            proverRequest.input,
+            proverRequest.model_fingerprint,
+            proverRequest.seed
+          );
+          
+          if (proverResult.success && proverResult.output && proverResult.receiptBytes) {
+            const output = proverResult.output;
+            const receiptBytes = proverResult.receiptBytes;
+            
+            // Verify receipt locally before proceeding
+            const verificationResult = verifyReceipt(receiptBytes, proverRequest.image_id);
+            if (!verificationResult.success) {
+              console.error('[summarize] prover_request_error', {
+                req_id: proverRequest.seed,
+                error: 'receipt_verification_failed',
+                details: verificationResult.error
+              });
+              zkMode = 'failed';
+              warnings.push('receipt_verification_failed');
+            } else {
+              // Parse journal and validate bindings
+              const journal = verificationResult.journal!;
+              const expectedInputHash = sha256Hex(proverRequest.input);
+              const expectedOutputHash = sha256Hex(JSON.stringify(output));
+              
+              const bindingValidation = validateJournalBindings(
+                journal,
+                expectedInputHash,
+                expectedOutputHash,
+                proverRequest.model_fingerprint
+              );
+              
+              if (!bindingValidation.valid) {
+                console.error('[summarize] prover_request_error', {
+                  req_id: proverRequest.seed,
+                  error: 'journal_binding_validation_failed',
+                  details: bindingValidation.errors
+                });
+                zkMode = 'failed';
+                warnings.push('journal_validation_failed');
+              } else {
+                zkMode = 'real';
+                const kws = journal.keywords || output.keywords || [];
+                keywordsHash = sha256Hex(JSON.stringify(kws));
+                programHash = journal.programHash ? toBytes32(programHashFromAny(journal.programHash)) : ZERO_HASH;
+                
+                console.log('[summarize] prover_request_success', {
+                  req_id: proverRequest.seed,
+                  image_id: proverRequest.image_id,
+                  program_hash: programHash
+                });
+                
+                try {
+                  const [j, p] = await Promise.all([
+                    safeAddFile(Buffer.from(JSON.stringify(journal))),
+                    safeAddFile(receiptBytes)
+                  ]);
+                  if (j) journalCid = j;
+                  if (p) proofCid = p;
+                } catch {
+                  warnings.push('hosted_zk_ipfs_failed');
+                }
+              }
+            }
+          } else {
+            console.error('[summarize] prover_request_error', {
+              req_id: proverRequest.seed,
+              error: 'prover_request_failed',
+              details: proverResult.error
+            });
+            zkMode = 'failed';
+            warnings.push('hosted_prover_failed');
           }
-        } else {
+        } catch (error) {
+          console.error('[summarize] prover_request_error', {
+            error: 'prover_request_exception',
+            details: error instanceof Error ? error.message : String(error)
+          });
           zkMode = 'failed';
-          warnings.push('zk_failed');
+          warnings.push('hosted_prover_exception');
         }
       }
     }

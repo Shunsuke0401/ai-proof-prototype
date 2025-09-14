@@ -3,7 +3,7 @@ services:
     build:
       context: .
       args:
-        BUILD_ZK: 0
+        BUILD_ZK: 1
     ports:
       - "3000:3000"
     # Pass BUILD_ZK=1 (override) to enable full Rust zk build (slow).
@@ -21,8 +21,8 @@ services:
       # Enable real ZK proofs
       - ZK_HOST_ENABLED=1
       - MOCK_ZK=false
-    volumes:
-      - ./zk/target/release/zkhost:/app/bin/zkhost:ro
+    # volumes:
+      # - ./zk/target/release/zkhost:/app/bin/zkhost:ro  # Removed: using Docker-built binary instead
     depends_on:
       - ipfs
       - ollama

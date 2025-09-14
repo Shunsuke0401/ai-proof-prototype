@@ -2,6 +2,31 @@
  * IPFS client and upload utilities
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Mock storage for development
+const MOCK_STORAGE_FILE = path.join(process.cwd(), 'mock-ipfs-storage.json');
+
+function loadMockStorage(): Record<string, string> {
+  try {
+    if (fs.existsSync(MOCK_STORAGE_FILE)) {
+      return JSON.parse(fs.readFileSync(MOCK_STORAGE_FILE, 'utf8'));
+    }
+  } catch (e) {
+    console.warn('Failed to load mock IPFS storage:', e);
+  }
+  return {};
+}
+
+function saveMockStorage(storage: Record<string, string>): void {
+  try {
+    fs.writeFileSync(MOCK_STORAGE_FILE, JSON.stringify(storage, null, 2));
+  } catch (e) {
+    console.warn('Failed to save mock IPFS storage:', e);
+  }
+}
+
 /**
  * Add a file to IPFS using HTTP API directly
  */
@@ -22,6 +47,12 @@ export async function addFile(file: Blob | File | Uint8Array): Promise<string> {
       hash = ((hash << 5) - hash + content[i]) & 0xffffffff;
     }
     const mockCid = `Qm${Math.abs(hash).toString(36).padStart(44, '0')}`;
+    
+    // Store content in mock storage
+    const storage = loadMockStorage();
+    storage[mockCid] = Buffer.from(content).toString('base64');
+    saveMockStorage(storage);
+    
     console.log(`🔧 Mock IPFS: Generated CID ${mockCid} for ${content.length} bytes`);
     return mockCid;
   }
@@ -65,6 +96,18 @@ export async function addJson(data: any): Promise<string> {
  * Get a file from IPFS using HTTP API
  */
 export async function getFile(cid: string): Promise<Uint8Array> {
+  // Use mock IPFS for development
+  if (process.env.NODE_ENV !== 'production') {
+    const storage = loadMockStorage();
+    const base64Content = storage[cid];
+    if (!base64Content) {
+      throw new Error(`Mock IPFS: CID ${cid} not found in storage`);
+    }
+    const buffer = Buffer.from(base64Content, 'base64');
+    console.log(`🔧 Mock IPFS: Retrieved CID ${cid} (${buffer.length} bytes)`);
+    return new Uint8Array(buffer);
+  }
+  
   // Use public IPFS gateway for development, Docker service for production
   const ipfsUrl = process.env.NEXT_PUBLIC_IPFS_API_URL || 
     (process.env.NODE_ENV === 'production' ? 'http://ipfs:5001' : 'https://ipfs.infura.io:5001');

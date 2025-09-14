@@ -33,8 +33,7 @@ export default function AIStudio() {
   const [journalCid, setJournalCid] = useState<string | null>(null);
   const [proofCid, setProofCid] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
-  // ZK keywords always enabled now (toggle removed)
-  const wantZk = true;
+  const [wantZk, setWantZk] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -119,19 +118,26 @@ export default function AIStudio() {
   } as const;
 
   async function handleSignAndPublish() {
-    if (!unsigned) return;
+    console.log("[DEBUG] handleSignAndPublish called", { unsigned, isConnected, address });
+    if (!unsigned) {
+      console.log("[DEBUG] No unsigned data, returning");
+      return;
+    }
     setSaveState("saving");
     try {
       let sig: string | null = null;
       if (isConnected && signTypedDataAsync) {
+        console.log("[DEBUG] Signing with MetaMask...");
         sig = await signTypedDataAsync({
           domain: unsigned.domain,
           types: unsigned.types,
           primaryType: unsigned.primaryType,
           message: unsigned.provenance,
         });
+        console.log("[DEBUG] Signature received:", sig?.slice(0, 20) + "...");
         setSignature(sig);
       }
+      console.log("[DEBUG] Making publish request...");
       const publishRes = await fetch("/api/publish", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -142,15 +148,18 @@ export default function AIStudio() {
           promptCid: unsigned.promptCid,
         }),
       });
+      console.log("[DEBUG] Publish response status:", publishRes.status);
       if (!publishRes.ok)
         throw new Error(`Publish failed (${publishRes.status})`);
       const pubJson = await publishRes.json();
+      console.log("[DEBUG] Publish response:", pubJson);
       setPublishedCid(pubJson.signedProvenanceCid);
       if (pubJson.journalCid) setJournalCid(pubJson.journalCid);
       if (pubJson.proofCid) setProofCid(pubJson.proofCid);
       setSaveState("saved");
+      console.log("[DEBUG] Publish completed successfully");
     } catch (e) {
-      console.error("Publish error", e);
+      console.error("[DEBUG] Publish error", e);
       setSaveState("error");
     }
   }
@@ -251,6 +260,25 @@ export default function AIStudio() {
                   />
                 </div>
               </div>
+              
+              {/* ZK Proof Toggle */}
+              <div className="mb-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={wantZk}
+                    onChange={(e) => setWantZk(e.target.checked)}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="font-semibold text-slate-700">
+                    Enable ZK Proof
+                  </span>
+                  <span className="text-slate-500">
+                    (Generate cryptographic proof of computation)
+                  </span>
+                </label>
+              </div>
+              
               <label className="block font-semibold text-slate-700 mb-2">
                 Input Text
               </label>
@@ -319,7 +347,10 @@ export default function AIStudio() {
                   {/* Save & Sign */}
                   <div>
                     <button
-                      onClick={handleSignAndPublish}
+                      onClick={() => {
+                        console.log("[DEBUG] Button clicked!", { saveState, unsigned: !!unsigned });
+                        handleSignAndPublish();
+                      }}
                       disabled={saveState === "saving"}
                       className="px-5 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
                     >

@@ -12,8 +12,15 @@ interface PublishBody {
 
 
 export async function POST(req: NextRequest) {
+  console.log('[publish] POST request received');
   try {
     const body: PublishBody = await req.json();
+    console.log('[publish] Request body:', { 
+      hasProvenance: !!body?.provenance, 
+      hasSignature: !!body?.signature, 
+      hasSigner: !!body?.signer,
+      signer: body?.signer 
+    });
     if (!body?.provenance || !body.signature || !body.signer) {
       return NextResponse.json({ error: 'Missing provenance, signature or signer' }, { status: 400 });
     }
@@ -48,11 +55,13 @@ export async function POST(req: NextRequest) {
       try { addOutputHashMapping(prov.outputHash, signedProvenanceCid); } catch {}
     }
 
-    return NextResponse.json({
+    const response = {
       signedProvenanceCid,
       proofCid: prov.proofCid || undefined,
       journalCid: prov.journalCid || undefined
-    });
+    };
+    console.log('[publish] Success response:', response);
+    return NextResponse.json(response);
   } catch (e) {
     console.error('[publish] error', e);
     return NextResponse.json({ error: 'Internal server error', details: e instanceof Error ? e.message : 'unknown' }, { status: 500 });
