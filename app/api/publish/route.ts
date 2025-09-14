@@ -30,9 +30,10 @@ export async function POST(req: NextRequest) {
 
     // Placeholder: we could fetch contentCid & recompute outputHash here (Stage 2 verify endpoint will do deeper checks)
 
+    const prunedTypes: any = { ContentProvenance: types.ContentProvenance };
     const signedEnvelope = {
       domain,
-      types,
+      types: prunedTypes,
       primaryType: 'ContentProvenance',
       provenance: prov,
       signature: body.signature,

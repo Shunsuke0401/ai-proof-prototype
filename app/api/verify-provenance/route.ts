@@ -74,17 +74,24 @@ export async function POST(req: NextRequest) {
 
     // --- Signature recovery ---
     let recoveredSigner: string | null = null;
-    if (!signature) {
+    let signatureError: string | undefined;
+    if (!signature || signature === 'unsigned') {
+      // Treat explicit sentinel 'unsigned' as missing signature rather than invalid hex
       issues.push('missing_signature');
     } else {
       try {
         const dom = envelope.domain || defaultDomain;
-        const tps = envelope.types || defaultTypes;
+        let tps: any = envelope.types || defaultTypes;
+        // Prune unused types to avoid ethers v6 ambiguity error when multiple root-level types exist
+        if (tps && tps.ContentProvenance) {
+          tps = { ContentProvenance: tps.ContentProvenance };
+        }
         recoveredSigner = verifyTypedData(dom, tps, prov, signature);
         if (claimedSigner && recoveredSigner.toLowerCase() !== claimedSigner.toLowerCase()) {
           issues.push('signature_recover_mismatch');
         }
-      } catch (e) {
+      } catch (e: any) {
+        signatureError = e?.message || 'unknown';
         issues.push('signature_invalid');
       }
     }
@@ -169,7 +176,8 @@ export async function POST(req: NextRequest) {
         outputHash: recomputedOutputHash,
         promptHash: recomputedPromptHash,
         keywordsHash: recomputedKeywordsHash
-      } : undefined
+      } : undefined,
+      signatureDebug: signatureError ? { error: signatureError } : undefined
     });
   } catch (e: any) {
     console.error('[verify-provenance] error', e);

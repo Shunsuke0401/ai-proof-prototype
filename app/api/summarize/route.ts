@@ -117,10 +117,12 @@ export async function POST(req: NextRequest) {
       proofCid: proofCid || ''
     };
 
+    // Prune unused EIP-712 types to avoid ambiguity (we only sign ContentProvenance)
+    const prunedTypes: any = { ContentProvenance: types.ContentProvenance };
     const unsigned: UnsignedProvenanceResponse = {
       provenance,
       domain,
-      types,
+      types: prunedTypes,
       primaryType: 'ContentProvenance',
       providerOutput,
       promptCid,
