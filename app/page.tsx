@@ -33,6 +33,11 @@ export default function AIStudio() {
   const [savedSignatureCid, setSavedSignatureCid] = useState<string | null>(
     null
   );
+  // Provider & model selection
+  const [provider, setProvider] = useState<
+    "mock" | "ollama" | "openai" | "anthropic" | "together"
+  >("mock");
+  const [model, setModel] = useState<string>("");
 
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
@@ -52,6 +57,8 @@ export default function AIStudio() {
         body: JSON.stringify({
           text: inputText,
           signer: address || "demo_user",
+          provider,
+          model: model || undefined,
         }),
       });
       if (!res.ok) throw new Error(`Generation failed (${res.status})`);
@@ -202,6 +209,58 @@ export default function AIStudio() {
 
           {activeTab === "generate" ? (
             <div>
+              {/* Provider / Model Selection */}
+              <div className="mb-4 flex flex-col md:flex-row gap-4">
+                <div className="flex-1">
+                  <label className="block font-semibold text-slate-700 mb-1 text-sm">
+                    Provider
+                  </label>
+                  <select
+                    value={provider}
+                    onChange={(e) => {
+                      const p = e.target.value as typeof provider;
+                      setProvider(p);
+                      // Reset model placeholder when provider changes
+                      if (p === "mock") setModel("");
+                      if (p === "ollama" && !model) setModel("llama3");
+                      if (p === "openai" && !model) setModel("gpt-4o-mini");
+                      if (p === "anthropic" && !model)
+                        setModel("claude-3-haiku-20240307");
+                      if (p === "together" && !model)
+                        setModel("meta-llama/Meta-Llama-3-8B-Instruct-Turbo");
+                    }}
+                    className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="mock">Mock (deterministic)</option>
+                    <option value="ollama">Ollama (local)</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="together">Together</option>
+                  </select>
+                </div>
+                <div className="flex-1">
+                  <label className="block font-semibold text-slate-700 mb-1 text-sm">
+                    Model (optional)
+                  </label>
+                  <input
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    placeholder={
+                      provider === "mock"
+                        ? "N/A"
+                        : provider === "ollama"
+                        ? "llama3"
+                        : provider === "openai"
+                        ? "gpt-4o-mini"
+                        : provider === "anthropic"
+                        ? "claude-3-haiku-20240307"
+                        : "meta-llama/Meta-Llama-3-8B-Instruct-Turbo"
+                    }
+                    disabled={provider === "mock"}
+                    className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none disabled:opacity-50"
+                  />
+                </div>
+              </div>
               <label className="block font-semibold text-slate-700 mb-2">
                 Input Text
               </label>

@@ -3,6 +3,10 @@ services:
     build: .
     ports:
       - "3000:3000"
+    # Load developer secrets (not committed) from local file.
+    # Create a copy of .env.example named .env.local before running.
+    env_file:
+      - .env.local
     environment:
       - OLLAMA_API_URL=http://ollama:11434
       - IPFS_API_URL=http://ipfs:5001

@@ -5,10 +5,11 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { ErrorResponse } from '../../../api/types';
+import { summarizeWithProvider, ProviderName } from '../../../api/providers';
 
 interface ZKSummaryResponse {
   summary: string;
-  programHash: string;
+  programHash: string; // reuse previous naming for continuity (modelHash)
   inputHash: string;
   outputHash: string;
   zk: {
@@ -17,6 +18,8 @@ interface ZKSummaryResponse {
   };
   signer: string;
   timestamp: number;
+  provider: ProviderName;
+  model: string;
 }
 
 // Mock ZK implementation for testing
@@ -47,7 +50,7 @@ function generateMockSummary(text: string) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { text, signer } = body;
+  const { text, signer, provider = 'mock', model } = body as { text: string; signer: string; provider?: ProviderName; model?: string };
     
     if (!text || typeof text !== 'string') {
       return NextResponse.json(
@@ -71,8 +74,17 @@ export async function POST(request: NextRequest) {
     }
     
     try {
-      // Generate mock summary and proof
-      const mockResult = generateMockSummary(text);
+      // Generate summary via selected provider (mock keeps deterministic behavior)
+      let aiSummary;
+      try {
+        aiSummary = await summarizeWithProvider({ provider, text, model });
+      } catch (provErr) {
+        console.warn('Primary provider failed, falling back to mock:', provErr);
+        aiSummary = await summarizeWithProvider({ provider: 'mock', text });
+      }
+
+      // Maintain previous mock hashing fields (map modelHash -> programHash etc.)
+      const mockResult = generateMockSummary(text); // keep keyword extraction & proof placeholders
 
       // Upload mock proof and journal to IPFS
       const proofFormData = new FormData();
@@ -114,8 +126,8 @@ export async function POST(request: NextRequest) {
       }
       
       const result: ZKSummaryResponse = {
-        summary: mockResult.summary,
-        programHash: mockResult.programHash,
+        summary: aiSummary.summary || mockResult.summary,
+        programHash: aiSummary.modelHash || mockResult.programHash,
         inputHash: mockResult.inputHash,
         outputHash: mockResult.outputHash,
         zk: {
@@ -123,7 +135,9 @@ export async function POST(request: NextRequest) {
           journalCid
         },
         signer,
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        provider: provider,
+        model: aiSummary.model
       };
       
       return NextResponse.json(result);
