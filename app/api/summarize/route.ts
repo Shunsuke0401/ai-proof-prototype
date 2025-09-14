@@ -5,28 +5,13 @@ import { join } from 'path';
 import crypto from 'crypto';
 import { summarizeWithProvider, ProviderName } from '../../../api/providers';
 import { addFile } from '../../../api/ipfs';
+import { domain, types, ZERO_HASH, ContentProvenanceValue, UnsignedProvenanceResponse } from '../../../api/types';
 
 // Configurable paths (keep binary path; gate execution behind flags)
 const ZK_HOST_BINARY = process.env.ZK_HOST_BINARY || (process.env.NODE_ENV === 'production' ? '/app/bin/zkhost' : './zk/target/release/zkhost');
 const TEMP_DIR = process.env.ZK_TEMP_DIR || (process.env.NODE_ENV === 'production' ? '/tmp' : './zk');
 
-interface ApiResponse {
-  summary: string;          // bound (proved if zk ran) summary
-  providerSummary?: string; // provider output (not bound if zk used)
-  programHash: string;
-  inputHash: string;
-  outputHash: string;
-  zk: {
-    mode: 'disabled' | 'mock' | 'real' | 'failed';
-    proofCid: string;
-    journalCid: string;
-  };
-  provider: ProviderName;
-  model: string;
-  signer: string;
-  timestamp: number; // epoch ms
-  warnings?: string[];
-}
+// Legacy response type replaced by UnsignedProvenanceResponse
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,14 +20,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Missing text' }, { status: 400 });
     }
 
-    const { text, signer = 'unknown', provider = 'mock', model, useZk = false }: { text: string; signer?: string; provider?: ProviderName; model?: string; useZk?: boolean } = body;
+  const { text, signer = 'unknown', provider = 'mock', model, useZk = false, params }: { text: string; signer?: string; provider?: ProviderName; model?: string; useZk?: boolean; params?: Record<string, any> } = body;
 
     if (!text.trim()) return NextResponse.json({ error: 'Empty text' }, { status: 400 });
     if (!signer) return NextResponse.json({ error: 'Missing signer' }, { status: 400 });
 
     // Provider summary first (even if zk fails, we have something)
-    let providerSummaryData: { summary: string; model: string; modelHash: string };
-    const warnings: string[] = [];
+  let providerSummaryData: { summary: string; model: string; modelHash: string };
+  const warnings: string[] = [];
     try {
       providerSummaryData = await summarizeWithProvider({ provider, text, model });
     } catch (e) {
@@ -50,26 +35,30 @@ export async function POST(req: NextRequest) {
       providerSummaryData = await summarizeWithProvider({ provider: 'mock', text });
     }
 
-    // Base hashes (provider version)
-    const inputHash = sha256Hex(text);
-    let boundSummary = providerSummaryData.summary;
-    let outputHash = sha256Hex(boundSummary);
-    let programHash = providerSummaryData.modelHash;
-    let zkMode: ApiResponse['zk']['mode'] = 'disabled';
-    let proofCid = 'ipfs_unavailable_proof';
-    let journalCid = 'ipfs_unavailable_journal';
+  // Canonical param normalization (deterministic inference requirements)
+  const canonicalParams = canonicalizeParams(params);
+  const paramsHash = sha256Hex(JSON.stringify(canonicalParams));
 
-    if (useZk) {
-      // Gate real execution
+  // promptHash == hash of the original text (prompt)
+  const promptHash = sha256Hex(text);
+  const providerOutput = providerSummaryData.summary;
+  const outputHash = sha256Hex(providerOutput);
+
+  // Defaults for zk fields
+  let programHash = ZERO_HASH;      // will be real program/image hash or ZERO
+  let keywordsHash = ZERO_HASH;     // hash over canonical keywords JSON
+  let journalCid = '';
+  let proofCid = '';
+  let zkMode: 'disabled' | 'real' | 'mock' | 'failed' = 'disabled';
+
+  if (useZk) {
       const zkEnabled = process.env.ZK_HOST_ENABLED === '1';
       const forceMock = process.env.MOCK_ZK === 'true' || !zkEnabled;
-
       if (forceMock) {
         zkMode = 'mock';
-        const mock = await generateMockJournal(text);
-        boundSummary = generateSummaryText(mock.keywords);
+        const mock = await generateMockJournal(providerOutput);
         programHash = mock.programHash;
-        outputHash = mock.outputHash; // Already hash of keywords JSON; we re-hash boundSummary for clarity if desired
+        keywordsHash = sha256Hex(JSON.stringify(mock.keywords));
         try {
           const [j, p] = await Promise.all([
             safeAddFile(Buffer.from(JSON.stringify(mock.journalData))),
@@ -81,48 +70,64 @@ export async function POST(req: NextRequest) {
           warnings.push('mock_zk_ipfs_failed');
         }
       } else {
-        const real = await runRealZK(text).catch(e => {
-          warnings.push('zk_exec_error');
-          return null;
-        });
+        const real = await runRealZK(providerOutput).catch(e => { warnings.push('zk_exec_error'); return null; });
         if (real && real.success && real.journalData) {
           zkMode = 'real';
-            const keywords = real.journalData.keywords || [];
-            boundSummary = generateSummaryText(keywords);
-            programHash = real.journalData.programHash || programHash;
-            outputHash = sha256Hex(boundSummary);
-            try {
-              const [j, p] = await Promise.all([
-                safeAddFile(Buffer.from(JSON.stringify(real.journalData))),
-                safeAddFile(real.proofBytes || Buffer.from(''))
-              ]);
-              if (j) journalCid = j;
-              if (p) proofCid = p;
-            } catch {
-              warnings.push('real_zk_ipfs_failed');
-            }
+          const journal = real.journalData;
+          const kws = journal.keywords || [];
+          // Keywords in journal should already be canonical; compute hash same strategy as guest
+          keywordsHash = sha256Hex(JSON.stringify(kws));
+          programHash = journal.programHash && journal.programHash !== '<FILLED_BY_HOST>' ? toBytes32(programHashFromAny(journal.programHash)) : ZERO_HASH;
+          try {
+            const [j, p] = await Promise.all([
+              safeAddFile(Buffer.from(JSON.stringify(journal))),
+              safeAddFile(real.proofBytes || Buffer.from(''))
+            ]);
+            if (j) journalCid = j;
+            if (p) proofCid = p;
+          } catch {
+            warnings.push('real_zk_ipfs_failed');
+          }
         } else {
           zkMode = 'failed';
-          warnings.push('zk_failed_fallback_provider');
+          warnings.push('zk_failed');
         }
       }
     }
 
-    const response: ApiResponse = {
-      summary: boundSummary,
-      providerSummary: providerSummaryData.summary,
-      programHash,
-      inputHash,
+    // Store raw provider content to IPFS (contentCid)
+  const contentCid = await addFile(Uint8Array.from(Buffer.from(providerOutput)));
+  // Store original prompt separately (not strictly required for verification but useful to reveal later)
+  let promptCid: string | undefined;
+  try { promptCid = await addFile(Uint8Array.from(Buffer.from(text))); } catch {}
+
+    const provenance: ContentProvenanceValue = {
+      version: 1,
+      modelId: providerSummaryData.model,
+      modelHash: providerSummaryData.modelHash || '',
+      promptHash,
       outputHash,
-      zk: { mode: zkMode, proofCid, journalCid },
-      provider,
-      model: providerSummaryData.model,
-      signer,
+      paramsHash,
+      contentCid,
       timestamp: Date.now(),
-      warnings: warnings.length ? warnings : undefined
+      attestationStrategy: useZk ? (zkMode === 'real' ? 'zk-keywords' : zkMode === 'mock' ? 'zk-keywords-mock' : 'none') : 'none',
+      keywordsHash,
+      programHash: programHash === ZERO_HASH ? ZERO_HASH : programHash,
+      journalCid: journalCid || '',
+      proofCid: proofCid || ''
     };
 
-    return NextResponse.json(response);
+    const unsigned: UnsignedProvenanceResponse = {
+      provenance,
+      domain,
+      types,
+      primaryType: 'ContentProvenance',
+      providerOutput,
+      promptCid,
+      zk: useZk ? { mode: zkMode, journalCid, proofCid, warnings } : undefined
+    };
+
+    return NextResponse.json(unsigned);
   } catch (e) {
     console.error('[summarize] error', e);
     return NextResponse.json({ error: 'Internal server error', details: e instanceof Error ? e.message : 'unknown' }, { status: 500 });
@@ -204,4 +209,34 @@ async function safeAddFile(buf: Buffer | Uint8Array | string): Promise<string | 
     const bytes = Uint8Array.from(b);
     return await addFile(bytes);
   } catch { return null; }
+}
+
+// ----- Utility helpers for provenance -----
+function canonicalizeParams(p?: Record<string, any>): Record<string, any> {
+  const base: Record<string, any> = { temperature: 0, top_p: 1, ...(p || {}) };
+  const sorted: Record<string, any> = {};
+  for (const k of Object.keys(base).sort()) sorted[k] = base[k];
+  return sorted;
+}
+
+function toBytes32(hexish: string): string {
+  let h = hexish.trim();
+  if (h.startsWith('sha256:')) h = '0x' + h.slice(7);
+  if (!h.startsWith('0x')) h = '0x' + h;
+  h = h.toLowerCase();
+  // left pad if shorter than 66 chars (0x + 64)
+  if (h.length < 66) {
+    const nox = h.slice(2);
+    h = '0x' + nox.padStart(64, '0');
+  }
+  return h.slice(0, 66);
+}
+
+function programHashFromAny(value: string): string {
+  // Accept raw hex, sha256:<hex>, or other placeholder -> return hex body; fallback ZERO_HASH
+  if (!value) return ZERO_HASH;
+  if (value === '<FILLED_BY_HOST>') return ZERO_HASH;
+  if (value.startsWith('sha256:')) return value.slice(7);
+  if (value.startsWith('0x')) return value.slice(2);
+  return value;
 }

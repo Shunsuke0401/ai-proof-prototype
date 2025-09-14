@@ -3,19 +3,21 @@
 import { useState, useEffect } from "react";
 import { useAccount, useSignTypedData, useChainId } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import VerificationPanel from "./components/VerificationPanel";
+import CidVerificationPanel from "./components/CidVerificationPanel";
 
-interface ZKSummaryResponse {
-  summary: string;
-  programHash: string;
-  inputHash: string;
-  outputHash: string;
-  zk: {
-    proofCid: string;
-    journalCid: string;
+interface UnsignedProvenanceResponse {
+  provenance: any; // ContentProvenanceValue from backend
+  domain: any;
+  types: any;
+  primaryType: string;
+  providerOutput?: string;
+  promptCid?: string;
+  zk?: {
+    mode: string;
+    journalCid?: string;
+    proofCid?: string;
+    warnings?: string[];
   };
-  signer: string;
-  timestamp: number;
 }
 
 export default function AIStudio() {
@@ -24,7 +26,14 @@ export default function AIStudio() {
     "Write a concise summary about zero-knowledge proofs applications in content authenticity."
   );
   const [isGenerating, setIsGenerating] = useState(false);
-  const [zkResult, setZkResult] = useState<ZKSummaryResponse | null>(null);
+  const [unsigned, setUnsigned] = useState<UnsignedProvenanceResponse | null>(
+    null
+  );
+  const [publishedCid, setPublishedCid] = useState<string | null>(null);
+  const [journalCid, setJournalCid] = useState<string | null>(null);
+  const [proofCid, setProofCid] = useState<string | null>(null);
+  const [signature, setSignature] = useState<string | null>(null);
+  const [wantZk, setWantZk] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -49,7 +58,11 @@ export default function AIStudio() {
     if (!inputText.trim()) return;
     setIsGenerating(true);
     setError(null);
-    setZkResult(null);
+    setUnsigned(null);
+    setPublishedCid(null);
+    setJournalCid(null);
+    setProofCid(null);
+    setSignature(null);
     try {
       const res = await fetch("/api/summarize", {
         method: "POST",
@@ -59,11 +72,17 @@ export default function AIStudio() {
           signer: address || "demo_user",
           provider,
           model: model || undefined,
+          useZk: wantZk,
+          params: { temperature: 0, top_p: 1 },
         }),
       });
       if (!res.ok) throw new Error(`Generation failed (${res.status})`);
-      const data: ZKSummaryResponse = await res.json();
-      setZkResult(data);
+      const data: UnsignedProvenanceResponse = await res.json();
+      setUnsigned(data);
+      if (data.zk) {
+        setJournalCid(data.zk.journalCid || null);
+        setProofCid(data.zk.proofCid || null);
+      }
     } catch (e) {
       console.error("Generation error", e);
       setError(e instanceof Error ? e.message : "Unknown error");
@@ -98,65 +117,39 @@ export default function AIStudio() {
     ],
   } as const;
 
-  async function handleSave() {
-    if (!zkResult) return;
+  async function handleSignAndPublish() {
+    if (!unsigned) return;
     setSaveState("saving");
     try {
-      // 1. Store summary JSON
-      const summaryObject = {
-        summary: zkResult.summary,
-        programHash: zkResult.programHash,
-        inputHash: zkResult.inputHash,
-        outputHash: zkResult.outputHash,
-        proofCid: zkResult.zk.proofCid,
-        journalCid: zkResult.zk.journalCid,
-        signer: address || "demo_user",
-        timestamp: zkResult.timestamp,
-      };
-      const summaryCid = await uploadToIpfs(
-        JSON.stringify(summaryObject, null, 2),
-        "summary.json"
-      );
-
-      // 2. Build typed data + sign (optional)
-      const message = {
-        cid: summaryCid,
-        modelHash: zkResult.programHash,
-        timestamp: new Date(zkResult.timestamp).toISOString(),
-      } as const;
-      let signature: string | null = null;
+      let sig: string | null = null;
       if (isConnected && signTypedDataAsync) {
-        try {
-          signature = await signTypedDataAsync({
-            domain,
-            types,
-            primaryType: "SaveProof",
-            message,
-          });
-        } catch (sigErr) {
-          console.warn("Signature skipped", sigErr);
-        }
+        sig = await signTypedDataAsync({
+          domain: unsigned.domain,
+          types: unsigned.types,
+          primaryType: unsigned.primaryType,
+          message: unsigned.provenance,
+        });
+        setSignature(sig);
       }
-
-      // 3. Store signature wrapper
-      const signatureObj = {
-        signer: address || "demo_user",
-        domain,
-        types,
-        primaryType: "SaveProof",
-        value: message,
-        signature: signature || "unsigned",
-      };
-      const signatureCid = await uploadToIpfs(
-        JSON.stringify(signatureObj, null, 2),
-        "signature.json"
-      );
-
-      setSavedSummaryCid(summaryCid);
-      setSavedSignatureCid(signatureCid);
+      const publishRes = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provenance: unsigned.provenance,
+          signature: sig || "unsigned",
+          signer: address || "demo_user",
+          promptCid: unsigned.promptCid,
+        }),
+      });
+      if (!publishRes.ok)
+        throw new Error(`Publish failed (${publishRes.status})`);
+      const pubJson = await publishRes.json();
+      setPublishedCid(pubJson.signedProvenanceCid);
+      if (pubJson.journalCid) setJournalCid(pubJson.journalCid);
+      if (pubJson.proofCid) setProofCid(pubJson.proofCid);
       setSaveState("saved");
     } catch (e) {
-      console.error("Save error", e);
+      console.error("Publish error", e);
       setSaveState("error");
     }
   }
@@ -270,7 +263,7 @@ export default function AIStudio() {
                 className="w-full h-32 p-4 border-2 border-slate-200 rounded-lg resize-none focus:border-blue-500 focus:outline-none transition-colors"
                 placeholder="Enter text to summarize..."
               />
-              <div className="mt-4">
+              <div className="mt-4 flex items-center gap-4 flex-wrap">
                 <button
                   onClick={handleGenerate}
                   disabled={isGenerating || !inputText.trim()}
@@ -278,38 +271,66 @@ export default function AIStudio() {
                 >
                   {isGenerating ? "⏳ Generating..." : "✨ Generate Summary"}
                 </button>
+                <label className="flex items-center gap-2 text-xs text-slate-600 select-none">
+                  <input
+                    type="checkbox"
+                    checked={wantZk}
+                    onChange={(e) => setWantZk(e.target.checked)}
+                  />
+                  ZK Keywords
+                </label>
               </div>
               {error && (
                 <div className="mt-3 text-sm text-red-600">{error}</div>
               )}
-              {zkResult && (
+              {unsigned && (
                 <div className="mt-6 space-y-5">
-                  {/* Summary Block */}
+                  {/* Generated Content */}
                   <div>
                     <div className="text-sm font-semibold text-slate-700 mb-1">
-                      Summary
+                      Generated Content
                     </div>
                     <pre className="whitespace-pre-wrap text-sm bg-slate-50 p-4 rounded border border-slate-200 font-mono">
-                      {zkResult.summary}
+                      {unsigned.providerOutput}
                     </pre>
                   </div>
 
-                  {/* Metadata / ZK (mock) Panel */}
-                  <div className="grid gap-2 text-xs bg-slate-50 p-4 rounded border border-slate-200 font-mono">
-                    <div className="font-semibold text-slate-700 mb-1 normal-case tracking-normal">
-                      Generation Metadata (mock ZK)
+                  {/* Provenance Preview */}
+                  <div className="grid gap-1 text-xs bg-slate-50 p-4 rounded border border-slate-200 font-mono">
+                    <div className="font-semibold text-slate-700 mb-1">
+                      Provenance (unsigned)
                     </div>
-                    <div>Program Hash: {zkResult.programHash}</div>
-                    <div>Input Hash: {zkResult.inputHash}</div>
-                    <div>Output Hash: {zkResult.outputHash}</div>
-                    <div>Encrypted CID: {zkResult.zk.proofCid}</div>
-                    <div>Journal CID: {zkResult.zk.journalCid}</div>
+                    <div>Model ID: {unsigned.provenance.modelId}</div>
+                    <div>Prompt Hash: {unsigned.provenance.promptHash}</div>
+                    <div>Output Hash: {unsigned.provenance.outputHash}</div>
+                    <div>Params Hash: {unsigned.provenance.paramsHash}</div>
+                    <div>Content CID: {unsigned.provenance.contentCid}</div>
+                    <div>
+                      Attestation: {unsigned.provenance.attestationStrategy}
+                    </div>
+                    {unsigned.provenance.keywordsHash &&
+                      unsigned.provenance.keywordsHash !==
+                        "0x0000000000000000000000000000000000000000000000000000000000000000" && (
+                        <div>
+                          Keywords Hash: {unsigned.provenance.keywordsHash}
+                        </div>
+                      )}
+                    {unsigned.zk && (
+                      <>
+                        <div>ZK Mode: {unsigned.zk.mode}</div>
+                        {journalCid && <div>Journal CID: {journalCid}</div>}
+                        {proofCid && <div>Proof CID: {proofCid}</div>}
+                        {unsigned.zk.warnings?.length ? (
+                          <div>Warnings: {unsigned.zk.warnings.join(", ")}</div>
+                        ) : null}
+                      </>
+                    )}
                   </div>
 
                   {/* Save & Sign */}
                   <div>
                     <button
-                      onClick={handleSave}
+                      onClick={handleSignAndPublish}
                       disabled={saveState === "saving"}
                       className="px-5 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:opacity-50"
                     >
@@ -317,21 +338,23 @@ export default function AIStudio() {
                         ? "⏳ Saving..."
                         : saveState === "saved"
                         ? "✅ Saved"
-                        : "💾 Save & Sign"}
+                        : "� Sign & Publish"}
                     </button>
                   </div>
 
                   {/* Stored Artifact CIDs */}
-                  {(savedSummaryCid || savedSignatureCid) && (
+                  {(publishedCid || signature) && (
                     <div className="text-xs bg-emerald-50 border border-emerald-200 p-4 rounded space-y-1 font-mono">
                       <div className="font-semibold text-emerald-700 mb-1">
                         Stored Artifacts
                       </div>
-                      {savedSummaryCid && (
-                        <div>Summary CID: {savedSummaryCid}</div>
+                      {publishedCid && (
+                        <div>Signed Provenance CID: {publishedCid}</div>
                       )}
-                      {savedSignatureCid && (
-                        <div>Signature CID: {savedSignatureCid}</div>
+                      {journalCid && <div>Journal CID: {journalCid}</div>}
+                      {proofCid && <div>Proof CID: {proofCid}</div>}
+                      {signature && (
+                        <div>Signature: {signature.slice(0, 18)}…</div>
                       )}
                     </div>
                   )}
@@ -339,11 +362,7 @@ export default function AIStudio() {
               )}
             </div>
           ) : (
-            <VerificationPanel
-              onVerify={() => {
-                /* handled internally */
-              }}
-            />
+            <CidVerificationPanel />
           )}
         </div>
       </main>
