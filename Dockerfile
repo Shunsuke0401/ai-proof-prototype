@@ -4,7 +4,7 @@ ARG BUILD_ZK=0
 FROM rust:1.82-bullseye as rust-builder
 ARG BUILD_ZK
 
-# Install build dependencies and RISC Zero toolchain in builder stage
+# Install build dependencies (include unzip for RISC Zero artifact verification)
 RUN apt-get update && apt-get install -y \
     build-essential \
     g++ \
@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     cmake \
     pkg-config \
     libssl-dev \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install nightly Rust for edition2024 support
@@ -22,8 +23,19 @@ RUN rustup default nightly
 ENV CC=clang
 ENV CXX=clang++
 
-# Install RISC Zero toolchain in builder stage
-RUN cargo install cargo-risczero
+# Install RISC Zero toolchain only when building ZK components.
+# This avoids failures when BUILD_ZK=0 and keeps default build fast.
+RUN if [ "$BUILD_ZK" = "1" ]; then \
+            echo "[zk] Installing cargo-risczero plugin" && \
+            cargo install cargo-risczero && \
+            echo "[zk] Installing risczero target components" && \
+            cargo risczero install || { echo "[zk] cargo risczero install failed" >&2; exit 1; }; \
+        else \
+            echo "[zk] Skipping cargo-risczero install (BUILD_ZK!=1)"; \
+        fi
+
+# Always add the target explicitly so that if user later copies in prebuilt ELF or switches BUILD_ZK, the target exists.
+RUN rustup target add riscv32im-risc0-zkvm-elf || echo "[zk] Warning: could not add riscv32im target (may be added by cargo-risczero when enabled)"
 
 # Copy ZK source code and build with native CPU optimization
 COPY zk/ /app/zk/
