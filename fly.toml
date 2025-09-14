@@ -1,0 +1,42 @@
+# fly.toml app configuration file generated for signai on 2025-09-15T07:16:27+09:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'signai'
+primary_region = 'nrt'
+kill_signal = 'SIGINT'
+kill_timeout = '5s'
+
+[build]
+
+[env]
+  IPFS_GATEWAYS = 'https://ipfs.io/ipfs,https://cloudflare-ipfs.com/ipfs'
+  IPFS_MODE = 'mock'
+  NEXT_PUBLIC_IPFS_GATEWAY = 'https://ipfs.io/ipfs'
+  NODE_ENV = 'production'
+  PORT = '3000'
+  ZK_HOST_ENABLED = '0'
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ['app']
+  # Allow more time for first boot (install & cold start)
+  concurrency = { type = 'connections', hard_limit = 40, soft_limit = 30 }
+  [[http_service.checks]]
+    type = 'http'
+    interval = '20s'
+    timeout = '5s'
+    grace_period = '60s'
+    method = 'GET'
+    path = '/'
+    protocol = 'http'
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1

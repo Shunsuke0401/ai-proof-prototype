@@ -1,36 +1,33 @@
 # AI Proof Prototype
 
-> AI summarization with Ethereum wallet signing and IPFS storage for transparent, verifiable AI outputs
+> Verifiable AI output provenance: generate content, sign a single EIP-712 provenance record, publish, and let anyone verify origin & integrity from one CID.
 
-## 🎯 Project Description
+## 🎯 What It Does
 
-This prototype demonstrates a complete pipeline for creating verifiable AI-generated content with cryptographic proofs. It addresses the growing need for AI transparency and provenance by:
+Creates a cryptographically signed provenance envelope for AI-generated text. The envelope captures:
 
-- **Local AI Processing**: Uses Ollama for private, local AI summarization
-- **Cryptographic Signing**: EIP-712 wallet signatures for authenticity
-- **Encrypted Storage**: AES-GCM encryption with signature-derived keys
-- **Decentralized Storage**: IPFS for censorship-resistant data storage
-- **Reproducible Builds**: Docker-based builds with verification scripts
+| Field                 | Purpose                                      |
+| --------------------- | -------------------------------------------- | ------------------------------------------ |
+| modelId / modelHash   | Identify the model used (or mock)            |
+| promptHash            | SHA-256 of original input text               |
+| outputHash            | SHA-256 of model output summary              |
+| paramsHash            | Normalized generation params (deterministic) |
+| contentCid            | CID of the generated summary text (plain)    |
+| keywordsHash          | (Mock ZK) hash of extracted keywords list    |
+| programHash           | Placeholder / future ZK program binding      |
+| journalCid / proofCid | (Optional) ZK journal + proof (mock today)   |
+| timestamp             | Millisecond epoch of creation                |
+| attestationStrategy   | 'none'                                       | 'zk-keywords-mock' (future: 'zk-keywords') |
 
-## 🏆 Hackathon Requirement (c) Satisfaction
+All of this is signed as a single EIP-712 `ContentProvenance` struct. The signed bundle (domain + types + provenance + signature + optional promptCid) is stored as one JSON object on IPFS: **“Signed Provenance CID”**.
 
-**Requirement**: Bit-for-bit reproducible build + minimal verifier script
+## ✅ Reproducibility & Minimal Verification
 
-**Our Implementation**:
+- Deterministic build: pinned Node version, `npm ci`, reproducible Docker multi-stage.
+- Minimal verification: `/api/verify-provenance?cid=<signedProvenanceCid>` recomputes hashes & recovers signer.
+- Issues vs Warnings classification: hard failures (signature mismatch, hash mismatch) vs soft signals (missing optional proof, mock mode).
 
-1. **Reproducible Build**:
-   - Pinned Node.js version (`node:20.11.1-bullseye`)
-   - Locked dependencies with `npm ci`
-   - Fixed locale/timezone (`LANG=C.UTF-8`, `TZ=UTC`)
-   - Docker image digest tracking
-
-2. **Minimal Verifier Script**:
-   - `scripts/verify.sh`: Builds project, fetches IPFS data, verifies signatures
-   - `scripts/verify-signature.js`: EIP-712 signature verification
-   - Checks model hash consistency
-   - Validates metadata integrity
-
-## 🚀 Quick Start
+## 🚀 Quick Start (Local Docker)
 
 ### Prerequisites
 
@@ -49,116 +46,92 @@ cp .env.example .env
 ### 2. Run with Docker Compose
 
 ```bash
-# Start all services (app, Ollama, IPFS)
 docker compose up -d
-
-# Wait for Ollama to download models (first run takes ~5-10 minutes)
-docker compose logs -f ollama
-
-# Access the app
 open http://localhost:3000
 ```
 
 ### 3. Alternative: Local Development
 
 ```bash
-# Install dependencies
 npm install
-
-# Start Ollama separately
-# Download from: https://ollama.ai
-ollama serve
-ollama pull llama3
-
-# Start IPFS node
-# Download from: https://ipfs.io
-ipfs daemon
-
-# Start Next.js app
 npm run dev
 ```
 
-## 📱 How to Use
+## 📱 User Flow (Current)
 
-1. **Connect Wallet**: Click "Connect Wallet" and approve MetaMask connection
-2. **Enter Text**: Type or paste text you want to summarize (max 10,000 chars)
-3. **Summarize & Save**: Click the button to start the process:
-   - 🤖 AI generates summary using local Ollama
-   - 🔐 Summary is encrypted with wallet signature-derived key
-   - ✍️ You sign EIP-712 typed data with your wallet
-   - 📤 Encrypted data + metadata uploaded to IPFS
-4. **Get Results**: Three CIDs are displayed:
-   - `encrypted.bin`: AES-GCM encrypted summary
-   - `summary.json`: Metadata (model, hash, signer, timestamp)
-   - `signature.json`: EIP-712 signature proof
+1. Connect wallet (RainbowKit + wagmi)
+2. Enter prompt text
+3. Click Generate & Sign
+4. Backend:
 
-## 🔍 Verification
+- Produces summary (mock provider today)
+- Computes hashes & (optional mock) keyword extraction
+- Creates unsigned provenance object
 
-### Verify a Saved Summary
+5. Wallet signs EIP-712 `ContentProvenance`
+6. Backend stores signed envelope JSON → returns **Signed Provenance CID**
+7. Paste Signed Provenance CID into Verification panel to inspect authenticity & integrity
 
-```bash
-# Basic verification (signature + metadata)
-./scripts/verify.sh <summary_cid> <signature_cid>
+## 🔍 Verification Endpoint
 
-# With model hash verification
-./scripts/verify.sh <summary_cid> <signature_cid> <expected_model_hash>
+`GET /api/verify-provenance?cid=<signedProvenanceCid>`
 
-# Example
-./scripts/verify.sh QmSummary123... QmSignature456... abc123def456...
-```
+Checks performed:
+| Category | Check |
+|----------|-------|
+| Signature | EIP-712 recover vs claimed signer |
+| Hashes | Recompute prompt/output/keywords hashes |
+| Structural | Required fields present & types pruned |
+| ZK (mock) | If attestationStrategy=zk-keywords-mock, verify internal mock consistency |
+| Integrity | contentCid fetch & outputHash match |
+| Optional | promptCid if present validates promptHash |
 
-### What the Verifier Checks
+Issues block verification; warnings are informational.
 
-✅ **Reproducible Build**: Docker image digest consistency  
-✅ **EIP-712 Signature**: Cryptographic proof of signer identity  
-✅ **Model Hash**: AI model and parameters used  
-✅ **Metadata Integrity**: Consistency across all stored files  
-✅ **Timestamp Verification**: Chronological ordering  
+## 🏗️ Architecture Overview
 
-## 🏗️ Architecture
-
-### Tech Stack
-
-- **Frontend**: Next.js 14 + TypeScript + Tailwind CSS
-- **Wallet**: wagmi + viem + RainbowKit
-- **AI**: Ollama (llama3, qwen2.5-3b)
-- **Crypto**: Web Crypto API (AES-GCM, PBKDF2)
-- **Storage**: IPFS (ipfs-http-client)
-- **Build**: Docker + Docker Compose
+- **Framework**: Next.js App Router (Node runtime)
+- **Signing**: EIP-712 single struct `ContentProvenance`
+- **Storage**: IPFS (mock mode by default in Fly deploy via `IPFS_MODE=mock`)
+- **Hashing**: SHA-256 (hex 0x-prefixed)
+- **ZK Layer**: Placeholder (mock keyword extraction; future RISC Zero receipt)
+- **Deployment**: Docker (local) / Fly.io (public)
 
 ### Data Flow
 
 ```
-[User Text] → [Ollama AI] → [Summary]
-     ↓
-[Encrypt with Signature-Derived Key] → [Upload to IPFS]
-     ↓
-[EIP-712 Sign] → [Store Metadata + Signature]
-     ↓
-[Three CIDs: encrypted.bin, summary.json, signature.json]
+Prompt → (Mock Provider) → Summary
+  ↓
+Compute hashes (prompt / output / params / keywords)
+  ↓
+Unsigned provenance JSON
+  ↓ (wallet sign EIP-712)
+Signed envelope (provenance + signature + domain + types + optional promptCid)
+  ↓
+Store envelope JSON (Signed Provenance CID)
 ```
 
-### File Structure
+### Key Files
 
 ```
 /app
   /components/WalletBox.tsx     # Wallet connection UI
-  /api/summarize/route.ts       # Ollama integration
-  /api/verify-signature/route.ts # Signature verification
+  /api/summarize/route.ts       # Generate summary + provenance (mock or future real)
+  /api/publish/route.ts         # Accept signature & persist envelope
+  /api/verify-provenance/route.ts # Full verification logic
   page.tsx                      # Main UI
   layout.tsx                    # App layout
   providers.tsx                 # wagmi/RainbowKit setup
   globals.css                   # Tailwind styles
 
-/api
-  crypto.ts                     # AES-GCM encryption utilities
-  ipfs.ts                       # IPFS client and upload
-  model.ts                      # Ollama API integration
-  types.ts                      # TypeScript definitions
+ /api
+  ipfs.ts                       # IPFS (mock/real) helper
+  providers.ts                  # Placeholder providers (mock active)
+  types.ts                      # EIP-712 domain & struct
 
-/scripts
-  verify.sh                     # Main verification script
-  verify-signature.js           # EIP-712 signature checker
+ /scripts
+  verify.sh                     # (Legacy) signature/metadata script (may diverge)
+  verify-signature.js           # Basic EIP-712 verification helper
 
 /expected
   model.sha256                  # Expected model hash
@@ -170,139 +143,96 @@ package.json                    # Dependencies (pinned versions)
 .env.example                    # Environment variables
 ```
 
-## 🔐 Security & Cryptography
-
-### EIP-712 Typed Data Schema
+## 🔐 EIP-712 Provenance Structure
 
 ```typescript
-const domain = {
+// Domain & types (simplified)
+domain = {
   name: "AIProof",
   version: "1",
   chainId: 1,
-  verifyingContract: "0x0000000000000000000000000000000000000000"
+  verifyingContract: "0x0000000000000000000000000000000000000000",
 };
-
-const types = {
-  SaveProof: [
-    { name: "cid", type: "string" },      // IPFS CID of encrypted data
-    { name: "modelHash", type: "string" }, // Hash of AI model + params
-    { name: "timestamp", type: "string" }  // ISO timestamp
-  ]
+types = {
+  ContentProvenance: [
+    { name: "version", type: "uint256" },
+    { name: "modelId", type: "string" },
+    { name: "modelHash", type: "string" },
+    { name: "promptHash", type: "bytes32" },
+    { name: "outputHash", type: "bytes32" },
+    { name: "paramsHash", type: "bytes32" },
+    { name: "contentCid", type: "string" },
+    { name: "timestamp", type: "uint256" },
+    { name: "attestationStrategy", type: "string" },
+    { name: "keywordsHash", type: "bytes32" },
+    { name: "programHash", type: "bytes32" },
+    { name: "journalCid", type: "string" },
+    { name: "proofCid", type: "string" },
+  ],
 };
 ```
 
-### Encryption Process
+## 📦 Signed Provenance Envelope (Stored JSON)
 
-1. **Key Derivation**: `signature_hex → SHA256 → PBKDF2 → AES-GCM key`
-2. **Encryption**: `AES-GCM-256` with random IV
-3. **Storage**: `IV + ciphertext` uploaded to IPFS
-
-### Model Hash Calculation
-
-```typescript
-// Deterministic hash of model name + parameters
-const modelString = JSON.stringify({ model, params }, Object.keys({ model, params }).sort());
-const modelHash = SHA256(modelString);
-```
-
-## 🌐 IPFS Storage Schema
-
-### `encrypted.bin`
-```
-[12-byte IV][Variable-length AES-GCM ciphertext]
-```
-
-### `summary.json`
-```json
+```jsonc
 {
-  "summary": "AI-generated summary text",
-  "model": "llama3",
-  "modelHash": "abc123...",
-  "params": { "temperature": 0.7, "top_p": 0.9 },
-  "signer": "0x742d35Cc6634C0532925a3b8D4C9db96590b5b8c",
-  "timestamp": "2024-01-15T10:30:00.000Z",
-  "originalTextHash": "def456...",
-  "encryptedCid": "QmEncrypted123..."
-}
-```
-
-### `signature.json`
-```json
-{
-  "signature": "0x1234567890abcdef...",
-  "domain": { /* EIP-712 domain */ },
-  "types": { /* EIP-712 types */ },
-  "value": { /* SaveProof message */ },
-  "signer": "0x742d35Cc6634C0532925a3b8D4C9db96590b5b8c",
-  "timestamp": "2024-01-15T10:30:00.000Z"
+  "provenance": { /* ContentProvenance fields */ },
+  "domain": { "name": "AIProof", "version": "1", ... },
+  "types": { "ContentProvenance": [ /* struct */ ] },
+  "primaryType": "ContentProvenance",
+  "signature": "0x...",
+  "signer": "0x...",
+  "promptCid": "Qm..." // optional
 }
 ```
 
 ## 🔧 Configuration
 
-### Environment Variables
+Key env vars:
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| IPFS_MODE | `mock` to generate deterministic pseudo CIDs (no real retrieval) | mock (Fly) |
+| NEXT_PUBLIC_IPFS_GATEWAY | Gateway base for fetching CIDs | https://ipfs.io/ipfs |
+| IPFS_GATEWAYS | Comma list fallback gateways | ipfs.io, cloudflare |
+| ZK_HOST_ENABLED | Enable real ZK host execution (future) | 0 |
+| ZK_HOST_BINARY | Override zkhost path | /app/bin/zkhost |
+
+If you add a real IPFS API node set: `NEXT_PUBLIC_IPFS_API_URL`.
+
+## 🧪 Development Workflow
+
+1. `docker compose up` (or `npm run dev` for hot reload)
+2. Generate & sign a provenance
+3. Copy Signed Provenance CID
+4. Verify via UI or `/api/verify-provenance?cid=...`
+5. (Optional) `scripts/verify-signature.js` for raw signature recovery tests
+
+## 🚀 Deployment (Fly.io)
 
 ```bash
-# Ollama Configuration
-OLLAMA_API_URL=http://localhost:11434
-
-# IPFS Configuration
-NEXT_PUBLIC_IPFS_API_URL=http://localhost:5001
-NEXT_PUBLIC_IPFS_GATEWAY=https://ipfs.io/ipfs
-
-# Optional: Enhanced wallet support
-NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=your_project_id
-NEXT_PUBLIC_ALCHEMY_ID=your_alchemy_key
+fly auth login
+fly deploy --build-arg BUILD_ZK=0
+fly open
 ```
 
-### Supported AI Models
+Mock mode caveat: CIDs are not resolvable on public gateways. For real retrieval integrate a pinning service (web3.storage, Pinata) and switch off `IPFS_MODE=mock`.
 
-- `llama3` (default, ~4.7GB)
-- `qwen2.5:3b` (~1.9GB)
-- Any Ollama-compatible model
+## 🛣 Roadmap
 
-## 🧪 Testing & Development
+- Real model provider integration (remove mock)
+- RISC Zero verification (journal/proof validation & programHash binding)
+- Trust tiers (Signature-only / Structural-ZK / Full-ZK)
+- Prompt privacy mode (omit promptCid or store salted hash)
+- Revocation / supersession mechanism
+- Optional on-chain anchoring of hash commitments
 
-### Run Tests
+## ⚠️ Current Limitations
 
-```bash
-# Lint code
-npm run lint
-
-# Build for production
-npm run build
-
-# Test verification script
-./scripts/verify.sh --help
-```
-
-### Development Workflow
-
-1. Make changes to source code
-2. Test locally with `npm run dev`
-3. Build Docker image: `docker build -t ai-proof .`
-4. Run verification: `./scripts/verify.sh <cids>`
-5. Check reproducibility: Compare image digests
-
-## 🚀 Future Extensions
-
-### (a) Zero-Knowledge Proofs
-
-- **ZK-SNARKs**: Prove AI model execution without revealing inputs
-- **Circom circuits**: Verify model weights and computation steps
-- **Privacy**: Generate summaries while keeping original text private
-
-### (b) Trusted Execution Environments
-
-- **Intel SGX**: Run AI models in secure enclaves
-- **Remote Attestation**: Cryptographic proof of execution environment
-- **Confidential Computing**: Protect both data and model weights
-
-### Multi-Signer DAO Logs
-
-- **Threshold Signatures**: Require multiple DAO members to sign
-- **Governance Integration**: Link to on-chain voting records
-- **Audit Trails**: Immutable logs of all AI-generated content
+- Mock summary provider
+- Mock ZK (keywords only, unverifiable)
+- Mock IPFS mode does not allow third-party retrieval
+- No encryption layer (intentional simplification vs early versions)
+- Single-user UX (no multi-tenant auth)
 
 ## 📄 License
 
@@ -318,35 +248,15 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🆘 Troubleshooting
 
-### Common Issues
+| Symptom                   | Likely Cause                     | Fix                                      |
+| ------------------------- | -------------------------------- | ---------------------------------------- |
+| Signature mismatch        | Wrong primaryType/types ordering | Ensure only `ContentProvenance` in types |
+| contentCid mismatch       | Summary altered after hash       | Regenerate and re-sign                   |
+| Gateway fetch timeout     | Public gateway slowness          | Add more gateways in `IPFS_GATEWAYS`     |
+| ZK fields zeroed          | Running mock                     | Set future real ZK mode when implemented |
+| CID not found (mock mode) | Using mock CIDs                  | Deploy real IPFS API + disable mock      |
 
-**Ollama not responding**:
-```bash
-# Check if Ollama is running
-curl http://localhost:11434/api/tags
-
-# Restart Ollama service
-docker compose restart ollama
-```
-
-**IPFS upload fails**:
-```bash
-# Check IPFS daemon
-curl http://localhost:5001/api/v0/version
-
-# Restart IPFS
-docker compose restart ipfs
-```
-
-**Wallet connection issues**:
-- Ensure MetaMask is installed and unlocked
-- Check network (should work on any EVM chain)
-- Clear browser cache and try again
-
-**Build not reproducible**:
-- Ensure Docker version consistency
-- Check system clock synchronization
-- Verify no local modifications to source
+Logs inside container: `docker compose logs -f app`
 
 ---
 
