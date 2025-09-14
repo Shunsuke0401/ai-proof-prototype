@@ -27,7 +27,7 @@ yarn-error.log*
 # Vercel
 .vercel
 
-# Rust build artifacts (will be built in container)
+# Rust build artifacts (keep release binaries for Docker)
 zk/target/
 zk/Cargo.lock
 

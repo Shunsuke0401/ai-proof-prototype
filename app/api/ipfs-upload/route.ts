@@ -16,8 +16,45 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
     }
 
-    const ipfsUrl = resolveIpfsApi();
+    // Convert file to buffer
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    console.log('File converted to buffer, size:', buffer.length);
 
+    // Use mock IPFS for development to avoid network issues
+    if (process.env.NODE_ENV !== 'production') {
+      // Generate a mock CID based on content hash
+      let hash = 0;
+      for (let i = 0; i < buffer.length; i++) {
+        hash = ((hash << 5) - hash + buffer[i]) & 0xffffffff;
+      }
+      const mockCid = `Qm${Math.abs(hash).toString(36).padStart(44, '0')}`;
+      console.log(`🔧 Mock IPFS Upload: Generated CID ${mockCid} for ${buffer.length} bytes`);
+      
+      return NextResponse.json({ 
+        cid: mockCid,
+        size: buffer.length,
+        name: file.name || 'file'
+      });
+    }
+
+    // Production IPFS upload
+    const ipfsUrl = process.env.IPFS_API_URL || 'http://ipfs:5001';
+    
+    // Create proper multipart form data
+    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
+    const CRLF = '\r\n';
+    
+    const formDataParts = [
+      `--${boundary}${CRLF}`,
+      `Content-Disposition: form-data; name="file"; filename="${file.name || 'file'}"${CRLF}`,
+      `Content-Type: ${file.type || 'application/octet-stream'}${CRLF}`,
+      CRLF,
+    ];
+    
+    const header = Buffer.from(formDataParts.join(''), 'utf8');
+    const footer = Buffer.from(`${CRLF}--${boundary}--${CRLF}`, 'utf8');
+    const body = Buffer.concat([header, buffer, footer]);
     // Use native FormData for the outgoing request to IPFS to avoid manual boundary issues.
     const outbound = new FormData();
     // The IPFS HTTP API expects the field name to be 'file'

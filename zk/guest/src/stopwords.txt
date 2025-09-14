@@ -1,0 +1,351 @@
+a
+an
+and
+are
+as
+at
+be
+by
+for
+from
+has
+he
+in
+is
+it
+its
+of
+on
+that
+the
+to
+was
+will
+with
+i
+you
+we
+they
+this
+but
+not
+or
+have
+had
+can
+could
+would
+should
+may
+might
+must
+shall
+do
+does
+did
+been
+being
+am
+were
+his
+her
+him
+she
+my
+your
+our
+their
+me
+us
+them
+who
+what
+when
+where
+why
+how
+which
+whose
+whom
+if
+then
+else
+while
+until
+since
+because
+although
+unless
+after
+before
+during
+through
+over
+under
+above
+below
+between
+among
+within
+without
+toward
+towards
+into
+onto
+off
+out
+up
+down
+around
+across
+along
+through
+via
+per
+plus
+minus
+times
+divided
+equals
+about
+approximately
+nearly
+almost
+quite
+very
+too
+so
+such
+more
+most
+less
+least
+much
+many
+few
+several
+some
+any
+all
+every
+each
+no
+none
+neither
+either
+both
+other
+another
+first
+second
+third
+last
+next
+previous
+here
+there
+everywhere
+anywhere
+somewhere
+nowhere
+now
+then
+today
+tomorrow
+yesterday
+always
+never
+sometimes
+often
+usually
+seldom
+rarely
+frequently
+occasionally
+yes
+no
+maybe
+perhaps
+possibly
+probably
+certainly
+definitely
+absolutely
+completely
+entirely
+partly
+mainly
+mostly
+generally
+specifically
+particularly
+especially
+namely
+including
+excluding
+except
+besides
+moreover
+furthermore
+however
+nevertheless
+nonetheless
+otherwise
+therefore
+thus
+hence
+consequently
+accordingly
+meanwhile
+similarly
+likewise
+conversely
+instead
+rather
+actually
+really
+truly
+indeed
+of course
+in fact
+for example
+for instance
+such as
+like
+unlike
+compared to
+in contrast
+on the other hand
+in addition
+also
+too
+as well
+furthermore
+moreover
+besides
+in conclusion
+finally
+lastly
+to sum up
+in summary
+overall
+in general
+broadly speaking
+strictly speaking
+frankly
+honestly
+obviously
+clearly
+apparently
+seemingly
+supposedly
+allegedly
+reportedly
+according to
+in my opinion
+in my view
+from my perspective
+as far as i know
+as i understand
+if i remember correctly
+if i'm not mistaken
+to be honest
+to tell the truth
+to be fair
+to be sure
+without doubt
+without question
+beyond doubt
+for sure
+for certain
+no doubt
+of course
+naturally
+obviously
+clearly
+plainly
+evidently
+apparently
+seemingly
+supposedly
+allegedly
+reportedly
+according to
+in accordance with
+in line with
+in keeping with
+in compliance with
+in conformity with
+in agreement with
+in harmony with
+in tune with
+in step with
+in sync with
+in tandem with
+in conjunction with
+in collaboration with
+in cooperation with
+in partnership with
+in association with
+in connection with
+in relation to
+in regard to
+in respect to
+with regard to
+with respect to
+with reference to
+in reference to
+with regard to
+concerning
+regarding
+respecting
+relating to
+pertaining to
+referring to
+dealing with
+touching on
+bearing on
+having to do with
+in terms of
+in the context of
+in the framework of
+in the light of
+in view of
+in consideration of
+taking into account
+taking into consideration
+bearing in mind
+keeping in mind
+with this in mind
+with that in mind
+all things considered
+all in all
+by and large
+for the most part
+more or less
+to a certain extent
+to some extent
+to a large extent
+to a great extent
+to a considerable extent
+to a significant extent
+to a substantial extent
+to a limited extent
+to a small extent
+to a minor extent
+to a lesser extent
+to a greater extent
+to a higher degree
+to a lower degree
+to a certain degree
+to some degree
+to a large degree
+to a great degree
+to a considerable degree
+to a significant degree
+to a substantial degree
+to a limited degree
+to a small degree
+to a minor degree
+to a lesser degree
+to a greater degree
