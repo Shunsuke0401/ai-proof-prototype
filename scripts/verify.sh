@@ -48,6 +48,7 @@ TEMP_DIR=$(mktemp -d)
 SUMMARY_FILE="$TEMP_DIR/summary.json"
 SIGNATURE_FILE="$TEMP_DIR/signature.json"
 
+
 # Download files using curl with local IPFS node
 if command -v curl >/dev/null 2>&1; then
     # Try local IPFS node first, fallback to gateway
@@ -82,45 +83,95 @@ echo "🔬 Verifying ZK proof..."
 HAS_ZK_DATA=$(node -e "const data = JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')); console.log(data.zk ? 'true' : 'false');" 2>/dev/null || echo "false")
 
 if [ "$HAS_ZK_DATA" = "true" ]; then
-    JOURNAL_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.journalCid)")
-    PROOF_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.proofCid)")
+    # Extract ZK proof CIDs from summary
+    JOURNAL_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.journalCid)" 2>/dev/null || echo "")
+    PROOF_CID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$SUMMARY_FILE', 'utf8')).zk.proofCid)" 2>/dev/null || echo "")
     
-    if [ "$JOURNAL_CID" != "undefined" ] && [ "$PROOF_CID" != "undefined" ]; then
-        echo "📥 Fetching ZK artifacts from IPFS..."
-        JOURNAL_URL="$IPFS_GATEWAY/$JOURNAL_CID"
-        PROOF_URL="$IPFS_GATEWAY/$PROOF_CID"
+    if [ -n "$JOURNAL_CID" ] && [ -n "$PROOF_CID" ]; then
+        echo "📥 Downloading ZK proof artifacts..."
+        echo "   Journal CID: $JOURNAL_CID"
+        echo "   Proof CID: $PROOF_CID"
+        
         JOURNAL_FILE="$TEMP_DIR/journal.json"
         PROOF_FILE="$TEMP_DIR/proof.bin"
         
-        # Download ZK artifacts
+        # Download journal and proof from IPFS
         if command -v curl >/dev/null 2>&1; then
-            curl -s "$JOURNAL_URL" -o "$JOURNAL_FILE"
-            curl -s "$PROOF_URL" -o "$PROOF_FILE"
-        elif command -v wget >/dev/null 2>&1; then
-            wget -q "$JOURNAL_URL" -O "$JOURNAL_FILE"
-            wget -q "$PROOF_URL" -O "$PROOF_FILE"
+            LOCAL_JOURNAL_URL="http://localhost:8080/ipfs/$JOURNAL_CID"
+            LOCAL_PROOF_URL="http://localhost:8080/ipfs/$PROOF_CID"
+            
+            curl -sL "$LOCAL_JOURNAL_URL" -o "$JOURNAL_FILE" 2>/dev/null || \
+            curl -s "$IPFS_GATEWAY/$JOURNAL_CID" -o "$JOURNAL_FILE" || { echo "❌ Failed to download journal"; exit 1; }
+            
+            curl -sL "$LOCAL_PROOF_URL" -o "$PROOF_FILE" 2>/dev/null || \
+            curl -s "$IPFS_GATEWAY/$PROOF_CID" -o "$PROOF_FILE" || { echo "❌ Failed to download proof"; exit 1; }
+        else
+            wget -q "$IPFS_GATEWAY/$JOURNAL_CID" -O "$JOURNAL_FILE" || { echo "❌ Failed to download journal"; exit 1; }
+            wget -q "$IPFS_GATEWAY/$PROOF_CID" -O "$PROOF_FILE" || { echo "❌ Failed to download proof"; exit 1; }
         fi
         
-        echo "✅ Downloaded ZK artifacts"
+        echo "✅ Downloaded ZK proof artifacts"
+        echo "   Journal size: $(wc -c < "$JOURNAL_FILE") bytes"
+        echo "   Proof size: $(wc -c < "$PROOF_FILE") bytes"
         
-        # Extract program ID from journal
-        PROGRAM_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$JOURNAL_FILE', 'utf8')).programHash)")
-        echo "🔍 Program ID: $PROGRAM_ID"
+        # Validate journal format
+        if ! node -e "JSON.parse(require('fs').readFileSync('$JOURNAL_FILE', 'utf8'))" 2>/dev/null; then
+            echo "❌ Invalid journal JSON format"
+            exit 1
+        fi
         
-        # Verify ZK proof using risc0-verify
-        echo "🔬 Running risc0-verify..."
-        if command -v risc0-verify >/dev/null 2>&1; then
-            risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_ID" --journal "$JOURNAL_FILE"
-            echo "✅ ZK proof verification passed!"
+        # Extract program hash from journal for verification
+        PROGRAM_HASH=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$JOURNAL_FILE', 'utf8')).programHash)" 2>/dev/null || echo "")
+        
+        if [ -n "$PROGRAM_HASH" ]; then
+            echo "🔍 Program Hash: $PROGRAM_HASH"
+            
+            # Verify ZK proof using risc0-verify (real proof validation)
+            if command -v risc0-verify >/dev/null 2>&1; then
+                echo "🔬 Running risc0-verify with RISC Zero toolchain..."
+                echo "   Command: risc0-verify --proof $PROOF_FILE --image $PROGRAM_HASH --journal $JOURNAL_FILE"
+                
+                # Capture output to check for dev-mode warnings
+                VERIFY_OUTPUT=$(risc0-verify --proof "$PROOF_FILE" --image "$PROGRAM_HASH" --journal "$JOURNAL_FILE" 2>&1)
+                VERIFY_EXIT_CODE=$?
+                
+                echo "$VERIFY_OUTPUT"
+                
+                if [ $VERIFY_EXIT_CODE -eq 0 ]; then
+                    # Check for dev-mode warnings in output
+                    if echo "$VERIFY_OUTPUT" | grep -i "dev.*mode\|development\|mock" >/dev/null 2>&1; then
+                        echo "❌ ZK proof verification detected dev-mode or mock proof!"
+                        echo "❌ Real ZK proofs are required for production verification"
+                        exit 1
+                    fi
+                    echo "✅ ZK proof verification successful!"
+                    echo "✅ Real computational integrity proven (no dev-mode detected)"
+                else
+                    echo "❌ ZK proof verification failed!"
+                    echo "❌ Either the proof is invalid or the program hash doesn't match"
+                    exit 1
+                fi
+            else
+                echo "❌ risc0-verify not found in PATH"
+                echo "   RISC Zero toolchain is required for ZK proof verification"
+                echo "   Install with: curl -L https://risczero.com/install | bash"
+                echo "   Then run: rzup install"
+                exit 1
+            fi
         else
-            echo "⚠️  risc0-verify not found, skipping ZK proof verification"
-            echo "   Install RISC Zero toolchain to enable ZK verification"
+            echo "❌ Program hash not found in journal"
+            exit 1
         fi
     else
-        echo "⚠️  ZK proof CIDs not found in summary"
+        echo "❌ ZK proof CIDs missing from summary"
+        echo "   Expected: journalCid and proofCid in summary.zk"
+        exit 1
     fi
 else
-    echo "⚠️  No ZK proof data found in summary (using mock implementation)"
+    echo "❌ No ZK proof data found in summary"
+    echo "   This appears to be a mock implementation"
+    echo "   Real ZK proofs are required for verification"
+    exit 1
 fi
 echo ""
 

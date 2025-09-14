@@ -15,7 +15,24 @@ export async function POST(request: NextRequest) {
     const buffer = Buffer.from(bytes);
     console.log('File converted to buffer, size:', buffer.length);
 
-    // Use direct HTTP API call to IPFS
+    // Use mock IPFS for development to avoid network issues
+    if (process.env.NODE_ENV !== 'production') {
+      // Generate a mock CID based on content hash
+      let hash = 0;
+      for (let i = 0; i < buffer.length; i++) {
+        hash = ((hash << 5) - hash + buffer[i]) & 0xffffffff;
+      }
+      const mockCid = `Qm${Math.abs(hash).toString(36).padStart(44, '0')}`;
+      console.log(`🔧 Mock IPFS Upload: Generated CID ${mockCid} for ${buffer.length} bytes`);
+      
+      return NextResponse.json({ 
+        cid: mockCid,
+        size: buffer.length,
+        name: file.name || 'file'
+      });
+    }
+
+    // Production IPFS upload
     const ipfsUrl = process.env.IPFS_API_URL || 'http://ipfs:5001';
     
     // Create proper multipart form data

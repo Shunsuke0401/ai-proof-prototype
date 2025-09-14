@@ -82,9 +82,16 @@ export default function Home() {
 
       const summaryData = await summaryResponse.json();
       
+      // Debug: Log the response data
+      console.log('Summary response data:', summaryData);
+      console.log('zkProof object:', summaryData.zkProof);
+      console.log('programHash value:', summaryData.zkProof?.programHash);
+      
       // Set the summary and program hash for display
       setSummary(summaryData.summary);
-      setModelHash(summaryData.programHash); // Using programHash instead of modelHash
+      const programHash = summaryData.zkProof?.programHash || '';
+      console.log('Setting modelHash to:', programHash);
+      setModelHash(programHash);
       setStatus('idle');
 
     } catch (err) {
@@ -105,6 +112,16 @@ export default function Home() {
       return;
     }
 
+    // Debug: Check modelHash value before signing
+    console.log('Current modelHash value:', modelHash);
+    console.log('ModelHash length:', modelHash.length);
+    console.log('ModelHash type:', typeof modelHash);
+    
+    if (!modelHash || modelHash.trim() === '' || modelHash === '<FILLED_BY_HOST>') {
+      setError('Model hash is missing or invalid. Please generate a summary first.');
+      return;
+    }
+
     try {
       setError(null);
       setStatus('encrypting');
@@ -116,6 +133,9 @@ export default function Home() {
         modelHash: modelHash,
         timestamp
       };
+      
+      // Debug: Log the value being signed
+      console.log('Signing tempValue:', tempValue);
 
       // Sign the temporary data to get signature for encryption
       const tempSignature = await signTypedDataAsync({
