@@ -33,7 +33,8 @@ export default function AIStudio() {
   const [journalCid, setJournalCid] = useState<string | null>(null);
   const [proofCid, setProofCid] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
-  const [wantZk, setWantZk] = useState<boolean>(true);
+  // ZK keywords always enabled now (toggle removed)
+  const wantZk = true;
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -44,7 +45,7 @@ export default function AIStudio() {
   );
   // Provider & model selection
   const [provider, setProvider] = useState<
-    "mock" | "ollama" | "openai" | "anthropic" | "together"
+    "mock" | "openai" | "anthropic" | "together"
   >("mock");
   const [model, setModel] = useState<string>("");
 
@@ -215,7 +216,6 @@ export default function AIStudio() {
                       setProvider(p);
                       // Reset model placeholder when provider changes
                       if (p === "mock") setModel("");
-                      if (p === "ollama" && !model) setModel("llama3");
                       if (p === "openai" && !model) setModel("gpt-4o-mini");
                       if (p === "anthropic" && !model)
                         setModel("claude-3-haiku-20240307");
@@ -225,7 +225,6 @@ export default function AIStudio() {
                     className="w-full border-2 border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none"
                   >
                     <option value="mock">Mock (deterministic)</option>
-                    <option value="ollama">Ollama (local)</option>
                     <option value="openai">OpenAI</option>
                     <option value="anthropic">Anthropic</option>
                     <option value="together">Together</option>
@@ -241,8 +240,6 @@ export default function AIStudio() {
                     placeholder={
                       provider === "mock"
                         ? "N/A"
-                        : provider === "ollama"
-                        ? "llama3"
                         : provider === "openai"
                         ? "gpt-4o-mini"
                         : provider === "anthropic"
@@ -271,14 +268,6 @@ export default function AIStudio() {
                 >
                   {isGenerating ? "⏳ Generating..." : "✨ Generate Summary"}
                 </button>
-                <label className="flex items-center gap-2 text-xs text-slate-600 select-none">
-                  <input
-                    type="checkbox"
-                    checked={wantZk}
-                    onChange={(e) => setWantZk(e.target.checked)}
-                  />
-                  ZK Keywords
-                </label>
               </div>
               {error && (
                 <div className="mt-3 text-sm text-red-600">{error}</div>
