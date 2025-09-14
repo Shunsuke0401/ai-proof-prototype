@@ -12,7 +12,7 @@ kill_timeout = '5s'
 
 [env]
   IPFS_GATEWAYS = 'https://ipfs.io/ipfs,https://cloudflare-ipfs.com/ipfs'
-  IPFS_MODE = 'mock'
+
   NEXT_PUBLIC_IPFS_GATEWAY = 'https://ipfs.io/ipfs'
   NODE_ENV = 'production'
   PORT = '3000'
