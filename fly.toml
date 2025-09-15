@@ -9,7 +9,7 @@ kill_signal = 'SIGINT'
 kill_timeout = '5s'
 
 [build]
-
+  build_args = { BUILD_ZK = "1" }
 [env]
   IPFS_GATEWAYS = 'https://ipfs.io/ipfs,https://cloudflare-ipfs.com/ipfs'
 
