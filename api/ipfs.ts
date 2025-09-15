@@ -1,7 +1,6 @@
 /**
  * IPFS client and upload utilities
  */
-
 // In-memory cache for mock mode so verification can succeed within same process lifecycle
 const mockStore: Map<string, Uint8Array> = new Map();
 

@@ -5,9 +5,8 @@ use std::fs;
 use std::path::Path;
 use std::process;
 
-// Include the guest methods
-mod methods;
-use methods::{GUEST_ELF, guest_id};
+// Use the methods crate
+use methods::{GUEST_ELF, GUEST_ID};
 
 fn main() {
     let matches = Command::new("zkhost")
@@ -93,7 +92,7 @@ fn main() {
     }
     
     // Write the seal as proof (this is the actual ZK proof)
-    let proof_bytes = prove_info.inner.seal().to_vec();
+    let proof_bytes = bincode::serialize(&prove_info).unwrap();
     if let Err(e) = fs::write(&proof_file, &proof_bytes) {
         eprintln!("Error writing proof file '{}': {}", proof_file, e);
         process::exit(1);
@@ -104,6 +103,6 @@ fn main() {
     println!("🔒 Proof: {} ({} bytes)", proof_file, proof_bytes.len());
     
     // Convert guest ID to hex string
-    let guest_id_digest = guest_id();
+    let guest_id_digest = GUEST_ID;
     println!("🎯 Image ID: {}", guest_id_digest);
 }

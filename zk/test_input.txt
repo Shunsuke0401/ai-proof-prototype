@@ -1,1 +1,1 @@
-This is a test document with some stopwords like the, and, or that should be filtered out. We want to see if the ZK proof generation works correctly with this sample text.
+Test input for ZK proof generation
